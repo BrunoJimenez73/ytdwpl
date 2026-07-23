@@ -185,11 +185,7 @@ class QueueManager:
             pid = item.playlist_id
             if pid:
                 completed = db.count_playlist_completed(pid)
-                db.update_playlist_status(pid, ItemStatus.COMPLETED,
-                                          completed_videos=completed)
-                for sibling in db.get_playlist_items(pid):
-                    db.update_status(sibling.id, sibling.status,
-                                     completed_videos=completed)
+                db.update_playlist_progress(pid, completed)
 
         except DownloadCancelled:
             db.update_status(item.id, ItemStatus.CANCELLED)

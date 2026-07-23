@@ -168,6 +168,15 @@ def delete_playlist(playlist_id: str) -> None:
     conn.commit()
 
 
+def update_playlist_progress(playlist_id: str, completed_videos: int) -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE queue_items SET completed_videos = ? WHERE playlist_id = ?",
+        (completed_videos, playlist_id),
+    )
+    conn.commit()
+
+
 def count_playlist_completed(playlist_id: str) -> int:
     conn = _conn()
     row = conn.execute(
