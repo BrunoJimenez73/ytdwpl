@@ -197,13 +197,13 @@ def _build_video_row(
     actions = []
     if item.status == ItemStatus.PENDING:
         actions.append(_action_btn(ft.Icons.CANCEL_OUTLINED, "Cancelar",
-                                   lambda i=item.id: on_cancel(i)))
+                                   lambda e, i=item.id: on_cancel(i)))
     if is_finished:
         actions.append(_action_btn(ft.Icons.DELETE_OUTLINE, "Eliminar",
-                                   lambda i=item.id: on_delete(i)))
+                                   lambda e, i=item.id: on_delete(i)))
     if item.status in (ItemStatus.FAILED, ItemStatus.CANCELLED):
         actions.append(_action_btn(ft.Icons.REPLAY, "Reintentar",
-                                   lambda i=item.id: on_retry(i)))
+                                   lambda e, i=item.id: on_retry(i)))
 
     return ft.Container(
         content=ft.Row([
