@@ -60,11 +60,27 @@ class QueueManager:
 
     def add_item(self, url: str, fmt: DownloadFormat) -> QueueItem:
         item = QueueItem.new(url, fmt)
-        info = extract_playlist_info(url)
-        item.playlist_title = info.get("playlist_title", "")
-        item.total_videos = info.get("video_count", 0)
         db.add_item(item)
         self.on_item_update(item)
+
+        def _fetch_info() -> None:
+            try:
+                info = extract_playlist_info(url)
+                db_item = db.get_item(item.id)
+                if db_item:
+                    db.update_status(
+                        item.id,
+                        db_item.status,
+                        playlist_title=info.get("playlist_title", ""),
+                        total_videos=info.get("video_count", 0),
+                    )
+                    updated = db.get_item(item.id)
+                    if updated:
+                        self.on_item_update(updated)
+            except Exception:
+                pass
+
+        threading.Thread(target=_fetch_info, daemon=True).start()
         return item
 
     def cancel_item(self, item_id: str) -> None:
@@ -93,6 +109,19 @@ class QueueManager:
 
             item = items[0]
             self._active_item_id = item.id
+
+            if not item.playlist_title:
+                try:
+                    info = extract_playlist_info(item.url)
+                    item.playlist_title = info.get("playlist_title", "")
+                    item.total_videos = info.get("video_count", 0)
+                    db.update_status(
+                        item.id, ItemStatus.PENDING,
+                        playlist_title=item.playlist_title,
+                        total_videos=item.total_videos,
+                    )
+                except Exception:
+                    item.playlist_title = item.url.rsplit("/", 1)[-1]
 
             try:
                 db.update_status(item.id, ItemStatus.DOWNLOADING)

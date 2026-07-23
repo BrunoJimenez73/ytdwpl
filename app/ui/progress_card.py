@@ -23,13 +23,57 @@ def build_progress_card(
         pause_icon = ft.Icons.PAUSE
         pause_label = "Pausar"
 
+    pct = f"{progress.percent:.1f}%" if progress.percent else "0.0%"
+
+    video_count = ""
+    if progress.playlist_count:
+        video_count = f"Video {progress.playlist_index} de {progress.playlist_count}"
+
+    size_info = ""
+    if progress.total_mb:
+        size_info = f"{progress.downloaded_mb:.1f} MB / {progress.total_mb:.1f} MB"
+
+    log_arrow = ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN, size=16, color=ft.Colors.GREY_600)
+    log_toggle_text = ft.Text("Mostrar registro", size=12, color=ft.Colors.GREY_600)
+    log_visible = len(progress.log_lines) > 0
+
+    log_text = ft.Text(
+        "\n".join(progress.log_lines[-60:]),
+        size=10,
+        color=ft.Colors.GREY_400,
+        font_family="monospace",
+        selectable=True,
+        no_wrap=False,
+    )
+
+    log_scroll = ft.Container(
+        content=ft.Column(
+            [log_text],
+            scroll=ft.ScrollMode.AUTO,
+            height=200,
+        ),
+        bgcolor=ft.Colors.with_opacity(0.03, ft.Colors.GREY_900),
+        border_radius=6,
+        padding=8,
+    )
+
+    log_container = ft.Container(content=log_scroll, visible=False)
+
+    def toggle_log(e) -> None:
+        new_visible = not log_container.visible
+        log_container.visible = new_visible
+        log_toggle_text.value = "Ocultar registro" if new_visible else "Mostrar registro"
+        log_arrow.name = ft.Icons.KEYBOARD_ARROW_UP if new_visible else ft.Icons.KEYBOARD_ARROW_DOWN
+        if e.control.page:
+            e.control.page.update()
+
     return ft.Container(
         content=ft.Column(
             [
                 ft.Row(
                     [
                         ft.Icon(ft.Icons.DOWNLOAD_ROUNDED, color=status_color, size=24),
-                        ft.Text(playlist_title[:60], weight=ft.FontWeight.W_600, size=16),
+                        ft.Text(playlist_title[:60], weight=ft.FontWeight.W_600, size=16, expand=True),
                         ft.Container(
                             ft.Text(status_text, size=12, color=status_color,
                                     weight=ft.FontWeight.W_500),
@@ -54,19 +98,21 @@ def build_progress_card(
                 ),
                 ft.Row(
                     [
-                        ft.Text(f"{progress.percent:.1f}%", size=14,
-                                weight=ft.FontWeight.W_500),
-                        ft.Text(f"{progress.downloaded_mb:.1f} MB / {progress.total_mb:.1f} MB"
-                                if progress.total_mb else "",
-                                size=12, color=ft.Colors.GREY_600),
+                        ft.Text(pct, size=14, weight=ft.FontWeight.W_500),
+                        ft.Text(size_info, size=12, color=ft.Colors.GREY_600),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
                 ft.Text(
-                    progress.video_title or "Obteniendo información...",
+                    progress.video_title or "Obteniendo informacion...",
                     size=13,
                     color=ft.Colors.GREY_700,
                     italic=not progress.video_title,
+                ),
+                ft.Container(
+                    ft.Text(video_count, size=13, weight=ft.FontWeight.W_600,
+                            color=ft.Colors.PRIMARY),
+                    visible=bool(video_count),
                 ),
                 ft.Row(
                     [
@@ -78,12 +124,6 @@ def build_progress_card(
                                 color=ft.Colors.GREY_600),
                         ft.Text(f"ETA {progress.eta}" if progress.eta else "ETA --",
                                 size=12, color=ft.Colors.GREY_600),
-                        ft.Text("·", color=ft.Colors.GREY_400),
-                        ft.Text(
-                            f"Video {progress.playlist_index} de {progress.playlist_count}"
-                            if progress.playlist_count else "",
-                            size=12, color=ft.Colors.GREY_600,
-                        ),
                     ],
                     spacing=4,
                 ),
@@ -101,11 +141,22 @@ def build_progress_card(
                             color=ft.Colors.ON_ERROR,
                             bgcolor=ft.Colors.ERROR,
                         ),
+                        ft.Container(expand=True),
+                        ft.Container(
+                            content=ft.Row(
+                                [log_arrow, log_toggle_text],
+                                spacing=4,
+                            ),
+                            on_click=toggle_log,
+                            visible=log_visible,
+                        ),
                     ],
                     spacing=8,
                 ),
+                log_container,
             ],
-            spacing=10,
+            spacing=8,
+            tight=True,
         ),
         padding=ft.Padding(left=16, top=16, right=16, bottom=16),
         border=ft.Border(

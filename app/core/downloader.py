@@ -6,7 +6,8 @@ import re
 import shutil
 import subprocess
 import threading
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,6 +25,7 @@ class DownloadProgress:
     playlist_index: int = 0
     playlist_count: int = 0
     status: str = "starting"
+    log_lines: list[str] = field(default_factory=list)
 
 
 ProgressCallback = Callable[[DownloadProgress], None]
@@ -44,15 +46,7 @@ def _resolve_ffmpeg() -> Optional[str]:
     return shutil.which("ffmpeg")
 
 
-def _resolve_ffprobe() -> Optional[str]:
-    priority = [
-        Path(__file__).resolve().parent.parent.parent / "bin" / "ffprobe.exe",
-        Path(__file__).resolve().parent.parent.parent / "bin" / "ffprobe",
-    ]
-    for p in priority:
-        if p.is_file():
-            return str(p)
-    return shutil.which("ffprobe")
+
 
 
 def _sanitize_dirname(name: str) -> str:
@@ -122,7 +116,6 @@ class Downloader:
         archive_path = self._make_archive_path(item, output_dir)
 
         ffmpeg = _resolve_ffmpeg()
-        ffprobe = _resolve_ffprobe()
 
         fmt = item.format
         outtmpl = str(output_dir / "%(playlist_title|Unknown)s" / "%(title)s.%(ext)s")
@@ -130,6 +123,7 @@ class Downloader:
         args = [
             "yt-dlp",
             "--continue",
+            "--yes-playlist",
             "--restrict-filenames",
             "--no-overwrites",
             "--newline",
@@ -141,8 +135,6 @@ class Downloader:
 
         if ffmpeg:
             args += ["--ffmpeg-location", os.path.dirname(ffmpeg)]
-        if ffprobe:
-            args += ["--ffprobe-location", ffprobe]
 
         if fmt == DownloadFormat.AUDIO:
             args += ["--extract-audio", "--audio-format", "mp3",
@@ -164,7 +156,9 @@ class Downloader:
             errors="replace",
         )
 
-        video_idx_re = re.compile(r'Downloading video\s+(\d+)\s+of\s+(\d+)')
+        video_idx_re = re.compile(r'Downloading (?:video|item)\s+(\d+)\s+of\s+(\d+)')
+        log_buffer: deque = deque(maxlen=100)
+        log_counter = 0
         line_pattern = re.compile(
             r'\[download\]\s+(.+?)\s+of\s+[~]?(\S+)\s+'
             r'(?:at\s+(\S+))?\s*(?:ETA\s+(\S+))?'
@@ -177,24 +171,22 @@ class Downloader:
                     raise DownloadCancelled()
 
                 line = raw_line.strip()
+                log_buffer.append(line)
+                log_counter += 1
+
+                should_update = True
 
                 if "[download] Destination:" in line:
                     title_part = line.split("Destination:")[-1].strip()
                     name = Path(title_part).stem
                     progress.video_title = name
                     progress.status = "downloading"
-                    on_progress(progress)
-                    continue
 
-                idx_m = video_idx_re.search(line)
-                if idx_m:
+                elif idx_m := video_idx_re.search(line):
                     progress.playlist_index = int(idx_m.group(1))
                     progress.playlist_count = int(idx_m.group(2))
-                    on_progress(progress)
-                    continue
 
-                m = line_pattern.search(line)
-                if m:
+                elif m := line_pattern.search(line):
                     raw_percent_str = m.group(1).rstrip("%")
                     try:
                         progress.percent = float(raw_percent_str)
@@ -205,18 +197,27 @@ class Downloader:
                         progress.speed = m.group(3)
                     if m.group(4):
                         progress.eta = m.group(4)
-
                     progress.status = "downloading"
-                    on_progress(progress)
 
-                if "[download] Finished" in line:
+                elif "[download] Finished" in line:
                     progress.percent = 100.0
                     progress.status = "finishing"
-                    on_progress(progress)
 
-                if "[ExtractAudio]" in line and "Destination" in line:
+                elif "[ExtractAudio]" in line and "Destination" in line:
                     dest = line.split("Destination:")[-1].strip()
                     progress.video_title = Path(dest).stem
+
+                elif "has already been downloaded" in line:
+                    path_part = line.split("[download]")[-1].strip()
+                    name = Path(path_part.split("has already")[0].strip()).stem
+                    progress.video_title = name
+                    progress.status = "downloading"
+
+                else:
+                    should_update = False
+
+                if should_update:
+                    progress.log_lines = list(log_buffer)
                     on_progress(progress)
 
             self._process.wait()
@@ -228,7 +229,7 @@ class Downloader:
             self._process.wait()
             raise RuntimeError(f"Download failed: {e}") from e
 
-        if self._process.returncode != 0 and not self._cancel_event.is_set():
+        if self._process.returncode not in (0, 2) and not self._cancel_event.is_set():
             raise RuntimeError(f"yt-dlp exited with code {self._process.returncode}")
 
 

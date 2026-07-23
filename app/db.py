@@ -80,7 +80,7 @@ def get_all_items() -> List[QueueItem]:
 def get_pending_items() -> List[QueueItem]:
     conn = _conn()
     rows = conn.execute(
-        "SELECT * FROM queue_items WHERE status IN (?, ?) ORDER BY created_at ASC",
+        "SELECT * FROM queue_items WHERE status = ? ORDER BY created_at ASC",
         (ItemStatus.PENDING.value,),
     ).fetchall()
     return [_row_to_item(r) for r in rows]

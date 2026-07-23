@@ -24,6 +24,7 @@ def build_queue_table(
     headers = [
         ft.DataColumn(ft.Text("Playlist", weight=ft.FontWeight.BOLD)),
         ft.DataColumn(ft.Text("Formato", weight=ft.FontWeight.BOLD)),
+        ft.DataColumn(ft.Text("Videos", weight=ft.FontWeight.BOLD)),
         ft.DataColumn(ft.Text("Estado", weight=ft.FontWeight.BOLD)),
         ft.DataColumn(ft.Text("Progreso", weight=ft.FontWeight.BOLD)),
         ft.DataColumn(ft.Text("Acciones", weight=ft.FontWeight.BOLD)),
@@ -42,7 +43,7 @@ def build_queue_table(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=8,
             ),
-            alignment=ft.alignment.center,
+            alignment=ft.Alignment.CENTER,
             padding=ft.Padding(left=0, top=60, right=0, bottom=0),
             expand=True,
         )
@@ -103,12 +104,18 @@ def _build_row(
         )
 
     progress_text = ""
-    if item.total_videos > 0:
-        progress_text = f"{item.completed_videos}/{item.total_videos}"
+    if item.status == ItemStatus.FAILED and item.error:
+        progress_text = item.error[:30]
+    elif item.total_videos > 0:
+        done = item.completed_videos
+        total = item.total_videos
+        progress_text = f"{done}/{total}"
         if item.status == ItemStatus.COMPLETED:
-            progress_text = f"✓ {progress_text}"
+            progress_text = f"\u2713 {progress_text}"
     elif item.status == ItemStatus.COMPLETED:
-        progress_text = "✓ Completa"
+        progress_text = "\u2713 Completa"
+
+    videos_text = str(item.total_videos) if item.total_videos > 0 else "?"
 
     fmt_label = "MP4" if item.format.value == "video" else "MP3"
 
@@ -118,6 +125,7 @@ def _build_row(
         cells=[
             ft.DataCell(ft.Text(title, overflow=ft.TextOverflow.ELLIPSIS)),
             ft.DataCell(ft.Text(fmt_label)),
+            ft.DataCell(ft.Text(videos_text, size=13)),
             ft.DataCell(
                 ft.Container(
                     ft.Text(label, size=12, color=color, weight=ft.FontWeight.W_500),

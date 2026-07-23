@@ -8,9 +8,11 @@ import flet as ft
 from app.core.downloader import DownloadProgress
 from app.core.models import DownloadFormat, ItemStatus, QueueItem
 from app.core.queue import QueueManager
+from app.core.settings import AppSettings
 from app.ui.add_dialog import show_add_dialog
 from app.ui.progress_card import build_progress_card
 from app.ui.queue_table import build_queue_table
+from app.ui.settings_dialog import show_settings_dialog
 
 
 def build_app(page: ft.Page, output_dir: Path) -> None:
@@ -18,59 +20,45 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     page.theme_mode = ft.ThemeMode.SYSTEM
     page.padding = 16
     page.spacing = 16
-    page.scroll = ft.ScrollMode.AUTO
 
-    queue_data: list[QueueItem] = []
+    settings = AppSettings.load()
+    output_dir = Path(settings.output_dir)
+
     active_progress = DownloadProgress()
     active_playlist_title = ""
     is_paused = False
+    current_tab = 0
 
-    queue_table = ft.Container()
+    pending_table = ft.Container(expand=True)
+    completed_table = ft.Container(expand=True)
     progress_container = ft.Container(visible=False)
-    empty_banner = ft.Container(
-        content=ft.Column(
-            [
-                ft.Icon(ft.Icons.PLAYLIST_PLAY, size=64, color=ft.Colors.GREY_400),
-                ft.Text("Agrega una playlist para empezar",
-                        size=18, color=ft.Colors.GREY_500),
-                ft.Text("Usa el botón + en la esquina inferior derecha",
-                        size=14, color=ft.Colors.GREY_400),
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=4,
-        ),
-        alignment=ft.alignment.center,
-        expand=True,
-    )
 
-    tab_names = ["Cola", "Completadas"]
-    tabs = ft.Tabs(
-        selected_index=0,
-        animation_duration=300,
-        tabs=[ft.Tab(text=n) for n in tab_names],
-        on_change=lambda _: _refresh(),
-    )
+    def _on_tab_change(e=None) -> None:
+        nonlocal current_tab
+        current_tab = tabs.selected_index
+        _refresh()
 
     def _refresh() -> None:
-        nonlocal queue_data
-        queue_data = _load_items_for_tab(tabs.selected_index)
-        queue_table.content = build_queue_table(
-            items=queue_data,
+        from app import db
+        all_items = db.get_all_items()
+        pending_items = [i for i in all_items if i.status in (
+            ItemStatus.PENDING, ItemStatus.DOWNLOADING,
+            ItemStatus.FAILED, ItemStatus.CANCELLED,
+        )]
+        completed_items = [i for i in all_items if i.status == ItemStatus.COMPLETED]
+        pending_table.content = build_queue_table(
+            items=pending_items,
+            on_cancel=_cancel_item,
+            on_delete=_delete_item,
+            on_retry=_retry_item,
+        )
+        completed_table.content = build_queue_table(
+            items=completed_items,
             on_cancel=_cancel_item,
             on_delete=_delete_item,
             on_retry=_retry_item,
         )
         page.update()
-
-    def _load_items_for_tab(tab: int) -> list[QueueItem]:
-        from app import db
-        all_items = db.get_all_items()
-        if tab == 0:
-            return [i for i in all_items if i.status in (
-                ItemStatus.PENDING, ItemStatus.DOWNLOADING,
-                ItemStatus.FAILED, ItemStatus.CANCELLED,
-            )]
-        return [i for i in all_items if i.status == ItemStatus.COMPLETED]
 
     def _cancel_item(item_id: str) -> None:
         queue.cancel_item(item_id)
@@ -131,10 +119,48 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             )
         page.update()
 
+    def _on_settings_saved(new_settings: AppSettings) -> None:
+        nonlocal settings
+        settings = new_settings
+
+    def _open_settings(e) -> None:
+        show_settings_dialog(page, settings, _on_settings_saved)
+
+    tabs = ft.Tabs(
+        length=2,
+        selected_index=0,
+        expand=True,
+        content=ft.Column(
+            expand=True,
+            controls=[
+                ft.TabBar(
+                    tabs=[
+                        ft.Tab(label="Cola"),
+                        ft.Tab(label="Completadas"),
+                    ],
+                ),
+                ft.TabBarView(
+                    expand=True,
+                    controls=[
+                        pending_table,
+                        completed_table,
+                    ],
+                ),
+            ],
+        ),
+        on_change=_on_tab_change,
+    )
+
     queue = QueueManager(
-        output_dir=output_dir,
+        output_dir=Path(settings.output_dir),
         on_item_update=_handle_item_update,
         on_progress=_handle_progress,
+    )
+
+    settings_btn = ft.IconButton(
+        icon=ft.Icons.SETTINGS,
+        tooltip="Ajustes",
+        on_click=_open_settings,
     )
 
     fab = ft.FloatingActionButton(
@@ -145,11 +171,15 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
         foreground_color=ft.Colors.ON_PRIMARY,
     )
 
+    page.appbar = ft.AppBar(
+        title=ft.Text("ytdwpl"),
+        actions=[settings_btn],
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+    )
+
     page.add(
-        tabs,
         progress_container,
-        empty_banner,
-        queue_table,
+        tabs,
         fab,
     )
 

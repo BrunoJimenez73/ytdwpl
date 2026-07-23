@@ -36,12 +36,14 @@ app/
 ├── core/
 │   ├── models.py        # QueueItem dataclass, ItemStatus/DownloadFormat enums
 │   ├── downloader.py    # yt-dlp subprocess wrapper, progress JSON parser
-│   └── queue.py         # Background worker thread, manages active/cancel/pause
+│   ├── queue.py         # Background worker thread, manages active/cancel/pause
+│   └── settings.py      # AppSettings dataclass (output dir, format) persisted to JSON
 └── ui/
-    ├── layout.py        # Main layout: tabs, FAB, wires everything
+    ├── layout.py        # Main layout: tabs, FAB, AppBar with settings, wires everything
     ├── queue_table.py   # DataTable for pending/completed items
     ├── progress_card.py # Active download card (progress bar, speed, ETA)
-    └── add_dialog.py    # AlertDialog to add playlist URL
+    ├── add_dialog.py    # AlertDialog to add playlist URL
+    └── settings_dialog.py  # AlertDialog for output dir + default format
 ```
 
 ## Key details
@@ -63,3 +65,6 @@ app/
 - ffmpeg is NOT bundled in repo; use `build.py --ffmpeg` to download it
 - First-run may be slow on large playlists due to `extract_playlist_info()` calling `--flat-playlist --dump-json`
 - Flet's `page.update()` must be called after modifying controls from background threads
+- **`--ffprobe-location` is NOT a valid yt-dlp option** — downloader uses only `--ffmpeg-location` (ffprobe must be colocated with ffmpeg)
+- **Exit code 2 ambiguity**: yt-dlp returns 2 for both `--ignore-errors` partial failures AND invalid arguments — the downloader accepts 2 as success, so test downloads with a real URL to validate
+- **Regex for playlist tracking**: yt-dlp outputs `Downloading item X of Y` (not `video`) when downloading playlists via `--yes-playlist`
