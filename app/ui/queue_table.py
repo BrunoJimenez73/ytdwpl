@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import flet as ft
@@ -116,7 +117,10 @@ def _build_row(
         )
 
     progress_text = ""
-    if item.status == ItemStatus.FAILED and item.error:
+    if item.status == ItemStatus.COMPLETED and item.file_path:
+        fname = Path(item.file_path).name
+        progress_text = f"\u2713 {fname}"
+    elif item.status == ItemStatus.FAILED and item.error:
         progress_text = item.error[:30]
     elif item.total_videos > 0:
         progress_text = f"{item.completed_videos}/{item.total_videos}"

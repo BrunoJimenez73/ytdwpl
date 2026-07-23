@@ -23,6 +23,7 @@ class DownloadProgress:
     downloaded_mb: float = 0.0
     total_mb: float = 0.0
     status: str = "starting"
+    file_path: str = ""
     log_lines: list[str] = field(default_factory=list)
 
 
@@ -172,8 +173,9 @@ class Downloader:
                 should_update = True
 
                 if "[download] Destination:" in line:
-                    title_part = line.split("Destination:")[-1].strip()
-                    progress.video_title = Path(title_part).stem
+                    path_part = line.split("Destination:")[-1].strip()
+                    progress.file_path = path_part
+                    progress.video_title = Path(path_part).stem
                     progress.status = "downloading"
 
                 elif m := line_pattern.search(line):

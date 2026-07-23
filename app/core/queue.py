@@ -34,6 +34,7 @@ class QueueManager:
         self._pause_event = threading.Event()
         self._pause_event.set()
         self._running = True
+        self._file_paths: Dict[str, str] = {}
 
     @property
     def active_ids(self) -> List[str]:
@@ -169,8 +170,10 @@ class QueueManager:
                 on_progress=lambda p: self._on_progress(item.id, p),
             )
 
+            fpath = self._file_paths.pop(item.id, "")
             db.update_status(item.id, ItemStatus.COMPLETED,
-                             completed_at=datetime.now(timezone.utc).isoformat())
+                             completed_at=datetime.now(timezone.utc).isoformat(),
+                             file_path=fpath)
 
             pid = item.playlist_id
             if pid:
@@ -194,6 +197,8 @@ class QueueManager:
         self.on_item_update(db.get_item(item.id))
 
     def _on_progress(self, item_id: str, progress: DownloadProgress) -> None:
+        if progress.file_path:
+            self._file_paths[item_id] = progress.file_path
         item = db.get_item(item_id)
         if item:
             self.on_item_update(item)

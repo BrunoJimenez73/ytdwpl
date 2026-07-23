@@ -31,6 +31,7 @@ class QueueItem:
     created_at: str = ""
     completed_at: str = ""
     error: str = ""
+    file_path: str = ""
     archive_path: str = ""
     total_videos: int = 0
     completed_videos: int = 0
