@@ -39,6 +39,7 @@ def init_db() -> None:
             playlist_title TEXT DEFAULT '',
             video_title TEXT DEFAULT '',
             playlist_id TEXT DEFAULT '',
+            selected INTEGER DEFAULT 1,
             created_at TEXT NOT NULL,
             completed_at TEXT,
             error TEXT DEFAULT '',
@@ -54,9 +55,11 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(queue_items)").fetchall()}
-    for col in ("video_title", "playlist_id", "file_path"):
+    for col in ("video_title", "playlist_id", "file_path", "selected"):
         if col not in existing:
-            conn.execute(f"ALTER TABLE queue_items ADD COLUMN {col} TEXT DEFAULT ''")
+            default = "1" if col == "selected" else "''"
+            colltype = "INTEGER" if col == "selected" else "TEXT"
+            conn.execute(f"ALTER TABLE queue_items ADD COLUMN {col} {colltype} DEFAULT {default}")
 
 
 def reset_stale_downloads() -> None:
@@ -73,11 +76,11 @@ def add_item(item: QueueItem) -> None:
     conn.execute(
         """INSERT INTO queue_items
            (id, url, format, status, playlist_title, video_title, playlist_id,
-            created_at, file_path, archive_path, total_videos)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected, created_at, file_path, archive_path, total_videos)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (item.id, item.url, item.format.value, item.status.value,
          item.playlist_title, item.video_title, item.playlist_id,
-         item.created_at, item.file_path, item.archive_path, item.total_videos),
+         int(item.selected), item.created_at, item.file_path, item.archive_path, item.total_videos),
     )
     conn.commit()
 
@@ -188,6 +191,7 @@ def _row_to_item(row: sqlite3.Row) -> QueueItem:
         error=row["error"] or "",
         file_path=row["file_path"] or "",
         archive_path=row["archive_path"] or "",
+        selected=bool(row["selected"]) if "selected" in row.keys() else True,
         total_videos=row["total_videos"] or 0,
         completed_videos=row["completed_videos"] or 0,
     )

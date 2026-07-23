@@ -33,6 +33,7 @@ class QueueItem:
     error: str = ""
     file_path: str = ""
     archive_path: str = ""
+    selected: bool = True
     total_videos: int = 0
     completed_videos: int = 0
 
@@ -45,6 +46,7 @@ class QueueItem:
         video_title: str = "",
         playlist_title: str = "",
         playlist_id: str = "",
+        selected: bool = True,
         total_videos: int = 0,
     ) -> QueueItem:
         now = datetime.now(timezone.utc).isoformat()
@@ -57,5 +59,6 @@ class QueueItem:
             playlist_title=playlist_title,
             playlist_id=playlist_id,
             created_at=now,
+            selected=selected,
             total_videos=total_videos,
         )

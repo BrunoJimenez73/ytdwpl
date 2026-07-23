@@ -107,6 +107,13 @@ class QueueManager:
 
         threading.Thread(target=_expand, daemon=True).start()
 
+    def toggle_selected(self, item_id: str) -> None:
+        item = db.get_item(item_id)
+        if item:
+            new_val = not item.selected
+            db.update_status(item_id, item.status, selected=int(new_val))
+            self.on_item_update(db.get_item(item_id))
+
     def cancel_item(self, item_id: str) -> None:
         with self._lock:
             dl = self._active.pop(item_id, None)
@@ -144,7 +151,7 @@ class QueueManager:
                 active_count = len(self._active)
 
             if active_count < self.max_concurrent:
-                pending = db.get_pending_items()
+                pending = [it for it in db.get_pending_items() if it.selected]
                 to_start = pending[: self.max_concurrent - active_count]
                 for item in to_start:
                     downloader = Downloader()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
 import flet as ft
 
@@ -16,12 +16,23 @@ _STATUS_LABELS = {
     ItemStatus.CANCELLED: ("Cancelada", ft.Colors.ORANGE),
 }
 
+_expanded_playlist_ids: Set[str] = set()
+
+
+def toggle_expanded(playlist_id: str) -> None:
+    if playlist_id in _expanded_playlist_ids:
+        _expanded_playlist_ids.discard(playlist_id)
+    else:
+        _expanded_playlist_ids.add(playlist_id)
+
 
 def build_queue_table(
     items: List[QueueItem],
     on_cancel: Callable[[str], None],
     on_delete: Callable[[str], None],
     on_retry: Callable[[str], None],
+    on_toggle_selected: Callable[[str], None],
+    on_refresh: Callable[[], None],
     on_cancel_playlist: Optional[Callable[[str], None]] = None,
     active_progress: Optional[Dict[str, DownloadProgress]] = None,
 ) -> ft.Control:
@@ -39,63 +50,113 @@ def build_queue_table(
             expand=True,
         )
 
-    rows = []
+    groups: Dict[str, List[QueueItem]] = {}
+    standalone: List[QueueItem] = []
     for item in items:
+        if item.playlist_id:
+            groups.setdefault(item.playlist_id, []).append(item)
+        else:
+            standalone.append(item)
+
+    rows: List[ft.Control] = []
+
+    for pid, videos in groups.items():
+        expanded = pid in _expanded_playlist_ids
+        header = _build_playlist_header(
+            pid, videos, expanded,
+            on_toggle=lambda p=pid: (
+                toggle_expanded(p),
+                on_refresh(),
+            ),
+            on_delete_playlist=on_cancel_playlist,
+        )
+        rows.append(header)
+        if expanded:
+            for v in videos:
+                prog = active_progress.get(v.id)
+                rows.append(_build_video_row(
+                    v, prog, on_cancel, on_delete,
+                    on_retry, on_toggle_selected,
+                ))
+
+    for item in standalone:
         prog = active_progress.get(item.id)
-        rows.append(_build_row(
-            item, prog, on_cancel, on_delete, on_retry, on_cancel_playlist,
+        rows.append(_build_video_row(
+            item, prog, on_cancel, on_delete,
+            on_retry, on_toggle_selected,
         ))
 
-    return ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("Playlist", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Video", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Formato", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Estado", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Progreso", weight=ft.FontWeight.BOLD)),
-            ft.DataColumn(ft.Text("Acciones", weight=ft.FontWeight.BOLD)),
-        ],
-        rows=rows,
-        border=ft.Border(
-            ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
-            ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
-            ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
-            ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
-        ),
-        border_radius=8,
-        heading_row_color=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-        column_spacing=16,
-        horizontal_margin=8,
-        data_row_min_height=40,
+    return ft.ListView(controls=rows, spacing=1, expand=True, padding=2)
+
+
+def _build_playlist_header(
+    playlist_id: str,
+    videos: List[QueueItem],
+    expanded: bool,
+    on_toggle: Callable[[], None],
+    on_delete_playlist: Optional[Callable[[str], None]],
+) -> ft.Control:
+    title = videos[0].playlist_title if videos and videos[0].playlist_title else "Playlist"
+    total = len(videos)
+    completed = sum(1 for v in videos if v.status == ItemStatus.COMPLETED)
+    pending = sum(1 for v in videos if v.status == ItemStatus.PENDING)
+    failed = sum(1 for v in videos if v.status == ItemStatus.FAILED)
+
+    subtitle_parts = []
+    if completed:
+        subtitle_parts.append(f"{completed}\u2713")
+    if pending:
+        subtitle_parts.append(f"{pending} pend.")
+    if failed:
+        subtitle_parts.append(f"{failed} err.")
+    subtitle = "  ".join(subtitle_parts) if subtitle_parts else f"{total} videos"
+
+    icon = ft.Icons.EXPAND_MORE if expanded else ft.Icons.CHEVRON_RIGHT
+
+    delete_btn = ft.Container()
+    if on_delete_playlist:
+        delete_btn = ft.IconButton(
+            ft.Icons.DELETE_OUTLINE,
+            tooltip="Eliminar playlist",
+            icon_size=18,
+            on_click=lambda e: on_delete_playlist(playlist_id),
+        )
+
+    return ft.Container(
+        content=ft.Row([
+            ft.Icon(icon, size=20, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Column([
+                ft.Text(title, weight=ft.FontWeight.W_600, size=14),
+                ft.Text(subtitle, size=11, color=ft.Colors.GREY_600),
+            ], spacing=1, tight=True, expand=True),
+            delete_btn,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        on_click=lambda e: on_toggle(),
+        padding=ft.Padding(left=8, top=6, right=4, bottom=6),
+        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+        border_radius=6,
     )
 
 
-def _build_row(
+def _build_video_row(
     item: QueueItem,
     prog: Optional[DownloadProgress],
     on_cancel: Callable[[str], None],
     on_delete: Callable[[str], None],
     on_retry: Callable[[str], None],
-    on_cancel_playlist: Optional[Callable[[str], None]],
-) -> ft.DataRow:
+    on_toggle_selected: Callable[[str], None],
+) -> ft.Control:
     label, color = _STATUS_LABELS.get(item.status, (item.status.value, ft.Colors.GREY))
     is_finished = item.status in (ItemStatus.COMPLETED, ItemStatus.FAILED, ItemStatus.CANCELLED)
     is_downloading = item.status == ItemStatus.DOWNLOADING
 
     fmt_label = "MP4" if item.format.value == "video" else "MP3"
+    video_name = item.video_title[:50] if item.video_title else item.url[:50]
 
-    playlist_name = item.playlist_title[:30] if item.playlist_title else ""
-    video_name = item.video_title[:40] if item.video_title else item.url[:40]
-    if not item.video_title:
-        video_name = f"Video #{item.id[:8]}"
-
-    actions = []
-    if item.status == ItemStatus.PENDING:
-        actions.append(_action_btn(ft.Icons.CANCEL_OUTLINED, "Cancelar", lambda i=item.id: on_cancel(i)))
-    if is_finished:
-        actions.append(_action_btn(ft.Icons.DELETE_OUTLINE, "Eliminar", lambda i=item.id: on_delete(i)))
-    if item.status in (ItemStatus.FAILED, ItemStatus.CANCELLED):
-        actions.append(_action_btn(ft.Icons.REPLAY, "Reintentar", lambda i=item.id: on_retry(i)))
+    chk = ft.Checkbox(
+        value=item.selected,
+        on_change=lambda e, i=item.id: on_toggle_selected(i),
+    )
 
     if is_downloading and prog:
         pct = prog.percent
@@ -107,7 +168,11 @@ def _build_row(
                 height=4,
                 border_radius=2,
             ),
-            ft.Text(f"{pct:.1f}%", size=11, color=ft.Colors.BLUE),
+            ft.Row([
+                ft.Text(f"{pct:.1f}%", size=11, color=ft.Colors.BLUE),
+                ft.Text(prog.speed or "", size=10, color=ft.Colors.GREY_500),
+                ft.Text(f"ETA {prog.eta}" if prog.eta else "", size=10, color=ft.Colors.GREY_500),
+            ], spacing=4),
         ], spacing=1, tight=True)
     else:
         status_content = ft.Container(
@@ -121,7 +186,7 @@ def _build_row(
         fname = Path(item.file_path).name
         progress_text = f"\u2713 {fname}"
     elif item.status == ItemStatus.FAILED and item.error:
-        progress_text = item.error[:30]
+        progress_text = item.error[:35]
     elif item.total_videos > 0:
         progress_text = f"{item.completed_videos}/{item.total_videos}"
         if item.status == ItemStatus.COMPLETED:
@@ -129,15 +194,36 @@ def _build_row(
     elif item.status == ItemStatus.COMPLETED:
         progress_text = "\u2713 Completa"
 
-    return ft.DataRow(
-        cells=[
-            ft.DataCell(ft.Text(playlist_name, size=12, overflow=ft.TextOverflow.ELLIPSIS)),
-            ft.DataCell(ft.Text(video_name, size=12, overflow=ft.TextOverflow.ELLIPSIS)),
-            ft.DataCell(ft.Text(fmt_label, size=12)),
-            ft.DataCell(status_content),
-            ft.DataCell(ft.Text(progress_text, size=12)),
-            ft.DataCell(ft.Row(actions, spacing=1)),
-        ]
+    actions = []
+    if item.status == ItemStatus.PENDING:
+        actions.append(_action_btn(ft.Icons.CANCEL_OUTLINED, "Cancelar",
+                                   lambda i=item.id: on_cancel(i)))
+    if is_finished:
+        actions.append(_action_btn(ft.Icons.DELETE_OUTLINE, "Eliminar",
+                                   lambda i=item.id: on_delete(i)))
+    if item.status in (ItemStatus.FAILED, ItemStatus.CANCELLED):
+        actions.append(_action_btn(ft.Icons.REPLAY, "Reintentar",
+                                   lambda i=item.id: on_retry(i)))
+
+    return ft.Container(
+        content=ft.Row([
+            chk,
+            ft.Column([
+                ft.Text(video_name, size=12, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Row([
+                    ft.Text(fmt_label, size=10, color=ft.Colors.GREY_500),
+                    ft.Container(
+                        ft.Text(progress_text, size=10, color=ft.Colors.GREY_600),
+                        visible=bool(progress_text) and not is_downloading,
+                    ),
+                ], spacing=6),
+            ], spacing=1, tight=True, expand=True),
+            status_content,
+            ft.Row(actions, spacing=1),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.Padding(left=24, top=3, right=4, bottom=3),
+        bgcolor=ft.Colors.SURFACE,
+        border_radius=4,
     )
 
 
