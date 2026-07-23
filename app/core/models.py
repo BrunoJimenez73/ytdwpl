@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -26,6 +26,8 @@ class QueueItem:
     format: DownloadFormat
     status: ItemStatus
     playlist_title: str = ""
+    video_title: str = ""
+    playlist_id: str = ""
     created_at: str = ""
     completed_at: str = ""
     error: str = ""
@@ -34,12 +36,25 @@ class QueueItem:
     completed_videos: int = 0
 
     @classmethod
-    def new(cls, url: str, fmt: DownloadFormat) -> QueueItem:
+    def new(
+        cls,
+        url: str,
+        fmt: DownloadFormat,
+        *,
+        video_title: str = "",
+        playlist_title: str = "",
+        playlist_id: str = "",
+        total_videos: int = 0,
+    ) -> QueueItem:
         now = datetime.now(timezone.utc).isoformat()
         return cls(
             id=uuid.uuid4().hex[:12],
             url=url,
             format=fmt,
             status=ItemStatus.PENDING,
+            video_title=video_title,
+            playlist_title=playlist_title,
+            playlist_id=playlist_id,
             created_at=now,
+            total_videos=total_videos,
         )

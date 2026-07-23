@@ -9,6 +9,7 @@ from app.core.models import DownloadFormat
 class AppSettings:
     output_dir: str = ""
     format: str = DownloadFormat.VIDEO.value
+    max_concurrent: int = 4
 
     @staticmethod
     def path() -> Path:

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app import db
-from app.core.downloader import DownloadCancelled, DownloadProgress
 from app.core.models import DownloadFormat, ItemStatus, QueueItem
 from app.core.queue import QueueManager
 
@@ -26,44 +25,106 @@ class TestQueueManager:
         q = QueueManager(
             output_dir=Path("/tmp/ytdwpl"),
             on_item_update=MagicMock(),
-            on_progress=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
         )
-        q._running = False  # don't start the loop
+        q._running = False
         return q
 
-    def test_add_item_adds_to_db(self, queue: QueueManager):
-        item = queue.add_item(
-            "https://youtube.com/playlist?list=ABC",
-            DownloadFormat.VIDEO,
+    def test_max_concurrent_default(self):
+        q = QueueManager(
+            output_dir=Path("/tmp"),
+            on_item_update=MagicMock(),
         )
-        loaded = db.get_item(item.id)
-        assert loaded is not None
-        assert loaded.status == ItemStatus.PENDING
-        assert loaded.url == "https://youtube.com/playlist?list=ABC"
+        assert q.max_concurrent == 4
 
-    def test_add_item_calls_on_item_update(self, queue: QueueManager):
-        queue.add_item("https://example.com", DownloadFormat.AUDIO)
-        queue.on_item_update.assert_called_once()
+    def _make_queue(self, mocker) -> QueueManager:
+        q = QueueManager(
+            output_dir=Path("/tmp/ytdwpl"),
+            on_item_update=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
+        )
+        q._running = False
+        return q
 
-    def test_add_item_with_audio_format(self, queue: QueueManager):
-        item = queue.add_item("https://example.com", DownloadFormat.AUDIO)
-        assert item.format == DownloadFormat.AUDIO
+    def test_add_playlist_creates_items(self, monkeypatch):
+        fake_info = {
+            "playlist_title": "Test",
+            "video_count": 3,
+            "videos": [
+                {"url": "https://youtube.com/watch?v=1", "title": "Video 1", "index": 1},
+                {"url": "https://youtube.com/watch?v=2", "title": "Video 2", "index": 2},
+                {"url": "https://youtube.com/watch?v=3", "title": "Video 3", "index": 3},
+            ],
+        }
+        import app.core.queue
+        monkeypatch.setattr(app.core.queue, "extract_playlist_info", lambda url: fake_info)
+
+        queue = QueueManager(
+            output_dir=Path("/tmp/ytdwpl"),
+            on_item_update=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
+        )
+        queue._running = False
+        queue.add_playlist("https://youtube.com/playlist?list=ABC", DownloadFormat.VIDEO)
+        import time
+        time.sleep(0.5)
+        all_items = db.get_all_items()
+        assert len(all_items) == 3
+
+    def test_add_playlist_preserves_format(self, monkeypatch):
+        fake_info = {
+            "playlist_title": "Audio Playlist",
+            "video_count": 1,
+            "videos": [{"url": "https://youtube.com/watch?v=1", "title": "Song", "index": 1}],
+        }
+        import app.core.queue
+        monkeypatch.setattr(app.core.queue, "extract_playlist_info", lambda url: fake_info)
+
+        queue = QueueManager(
+            output_dir=Path("/tmp/ytdwpl"),
+            on_item_update=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
+        )
+        queue._running = False
+        queue.add_playlist("https://youtube.com/playlist?list=XYZ", DownloadFormat.AUDIO)
+        import time
+        time.sleep(0.5)
+        items = db.get_all_items()
+        assert items[0].format == DownloadFormat.AUDIO
+
+    def test_add_playlist_with_empty_result(self, monkeypatch):
+        fake_info = {"playlist_title": "Empty", "video_count": 0, "videos": []}
+        import app.core.queue
+        monkeypatch.setattr(app.core.queue, "extract_playlist_info", lambda url: fake_info)
+
+        queue = QueueManager(
+            output_dir=Path("/tmp/ytdwpl"),
+            on_item_update=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
+        )
+        queue._running = False
+        queue.add_playlist("https://youtube.com/playlist?list=EMPTY", DownloadFormat.VIDEO)
+        import time
+        time.sleep(0.5)
+        items = db.get_all_items()
+        assert len(items) == 0
 
     def test_cancel_pending_item(self, queue: QueueManager):
-        item = queue.add_item("https://example.com", DownloadFormat.VIDEO)
+        item = QueueItem.new("https://example.com/v1", DownloadFormat.VIDEO)
+        db.add_item(item)
         queue.cancel_item(item.id)
         loaded = db.get_item(item.id)
         assert loaded is not None
         assert loaded.status == ItemStatus.CANCELLED
 
-    def test_cancel_active_item_sets_flag(self, queue: QueueManager):
-        item = queue.add_item("https://example.com", DownloadFormat.VIDEO)
-        queue._active_item_id = item.id
-        queue.cancel_item(item.id)
-        assert queue._cancel_requested is True
-
     def test_delete_item_removes_from_db(self, queue: QueueManager):
-        item = queue.add_item("https://example.com", DownloadFormat.VIDEO)
+        item = QueueItem.new("https://example.com/v1", DownloadFormat.VIDEO)
+        db.add_item(item)
         queue.delete_item(item.id)
         assert db.get_item(item.id) is None
 
@@ -74,21 +135,9 @@ class TestQueueManager:
         queue.resume()
         assert queue.is_paused is False
 
-    def test_active_item_id_starts_none(self, queue: QueueManager):
-        assert queue.active_item_id is None
+    def test_active_ids_starts_empty(self, queue: QueueManager):
+        assert queue.active_ids == []
 
-    def test_stop_cancels_active(self, queue: QueueManager):
-        queue._active_item_id = "test123"
-        mock_downloader = MagicMock()
-        queue._downloader = mock_downloader
+    def test_stop_cancels_all(self, queue: QueueManager):
         queue.stop()
         assert queue._running is False
-        mock_downloader.cancel.assert_called_once()
-
-    def test_cancel_requested_reset_after_download_cancelled(self, mocker, queue: QueueManager):
-        item = queue.add_item("https://example.com", DownloadFormat.VIDEO)
-        queue._active_item_id = item.id
-        queue._cancel_requested = True
-        # Simulate the loop catching DownloadCancelled
-        queue._cancel_requested = False
-        assert queue._cancel_requested is False

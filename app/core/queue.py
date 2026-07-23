@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
+from app import db
 from app.core.downloader import (
     DownloadCancelled,
     DownloadProgress,
@@ -12,7 +14,6 @@ from app.core.downloader import (
     extract_playlist_info,
 )
 from app.core.models import DownloadFormat, ItemStatus, QueueItem
-from app import db
 
 
 class QueueManager:
@@ -20,22 +21,24 @@ class QueueManager:
         self,
         output_dir: Path,
         on_item_update: Callable[[QueueItem], None],
-        on_progress: Callable[[DownloadProgress], None] = lambda p: None,
+        on_progress: Callable[[str, DownloadProgress], None] = lambda i, p: None,
+        max_concurrent: int = 4,
     ) -> None:
         self.output_dir = output_dir
         self.on_item_update = on_item_update
         self._on_progress_ext = on_progress
+        self.max_concurrent = max_concurrent
         self._thread: Optional[threading.Thread] = None
-        self._active_item_id: Optional[str] = None
-        self._downloader = Downloader()
+        self._active: Dict[str, Downloader] = {}
+        self._lock = threading.Lock()
         self._pause_event = threading.Event()
         self._pause_event.set()
-        self._cancel_requested = False
         self._running = True
 
     @property
-    def active_item_id(self) -> Optional[str]:
-        return self._active_item_id
+    def active_ids(self) -> List[str]:
+        with self._lock:
+            return list(self._active.keys())
 
     @property
     def is_paused(self) -> bool:
@@ -49,116 +52,149 @@ class QueueManager:
     def stop(self) -> None:
         self._running = False
         self._pause_event.set()
-        self._downloader.cancel()
+        with self._lock:
+            for dl in self._active.values():
+                dl.cancel()
 
     def pause(self) -> None:
         self._pause_event.clear()
-        self._downloader.cancel()
+        with self._lock:
+            for dl in self._active.values():
+                dl.cancel()
 
     def resume(self) -> None:
         self._pause_event.set()
 
-    def add_item(self, url: str, fmt: DownloadFormat) -> QueueItem:
-        item = QueueItem.new(url, fmt)
-        db.add_item(item)
-        self.on_item_update(item)
+    def add_playlist(self, url: str, fmt: DownloadFormat) -> None:
+        playlist_id = QueueItem.new(url, fmt).id
+        temp = QueueItem.new(
+            url, fmt,
+            playlist_title="Obteniendo informacion...",
+            playlist_id=playlist_id,
+        )
+        db.add_item(temp)
+        self.on_item_update(temp)
+        db.delete_item(temp.id)
 
-        def _fetch_info() -> None:
+        def _expand() -> None:
             try:
                 info = extract_playlist_info(url)
-                db_item = db.get_item(item.id)
-                if db_item:
-                    db.update_status(
-                        item.id,
-                        db_item.status,
-                        playlist_title=info.get("playlist_title", ""),
-                        total_videos=info.get("video_count", 0),
-                    )
-                    updated = db.get_item(item.id)
-                    if updated:
-                        self.on_item_update(updated)
-            except Exception:
-                pass
+                title = info.get("playlist_title", url.rsplit("/", 1)[-1])
+                videos = info.get("videos", [])
+                total = len(videos)
 
-        threading.Thread(target=_fetch_info, daemon=True).start()
-        return item
+                for v in videos:
+                    item = QueueItem.new(
+                        url=v["url"],
+                        fmt=fmt,
+                        video_title=v.get("title", ""),
+                        playlist_title=title,
+                        playlist_id=playlist_id,
+                        total_videos=total,
+                    )
+                    db.add_item(item)
+                    self.on_item_update(item)
+
+            except Exception:
+                item = QueueItem.new(
+                    url=url, fmt=fmt,
+                    playlist_title="Error al obtener playlist",
+                    playlist_id=playlist_id,
+                )
+                db.add_item(item)
+                self.on_item_update(item)
+
+        threading.Thread(target=_expand, daemon=True).start()
 
     def cancel_item(self, item_id: str) -> None:
-        if self._active_item_id == item_id:
-            self._cancel_requested = True
-            self._downloader.cancel()
-        else:
-            item = db.get_item(item_id)
-            if item and item.status in (ItemStatus.PENDING, ItemStatus.DOWNLOADING):
-                db.update_status(item_id, ItemStatus.CANCELLED)
-                self.on_item_update(db.get_item(item_id))
+        with self._lock:
+            dl = self._active.pop(item_id, None)
+            if dl:
+                dl.cancel()
+        item = db.get_item(item_id)
+        if item and item.status in (ItemStatus.PENDING, ItemStatus.DOWNLOADING):
+            db.update_status(item_id, ItemStatus.CANCELLED)
+            self.on_item_update(db.get_item(item_id))
+
+    def cancel_playlist(self, playlist_id: str) -> None:
+        for item in db.get_playlist_items(playlist_id):
+            self.cancel_item(item.id)
 
     def delete_item(self, item_id: str) -> None:
         self.cancel_item(item_id)
         db.delete_item(item_id)
         self.on_item_update(None)
 
+    def delete_playlist(self, playlist_id: str) -> None:
+        for item in db.get_playlist_items(playlist_id):
+            self.cancel_item(item.id)
+        db.delete_playlist(playlist_id)
+        self.on_item_update(None)
+
     def _loop(self) -> None:
         while self._running:
             self._pause_event.wait()
 
-            items = db.get_pending_items()
-            if not items:
-                threading.Event().wait(1)
-                continue
+            with self._lock:
+                self._active = {
+                    k: v for k, v in self._active.items()
+                    if v.is_cancelled() is False
+                }
+                active_count = len(self._active)
 
-            item = items[0]
-            self._active_item_id = item.id
-
-            if not item.playlist_title:
-                try:
-                    info = extract_playlist_info(item.url)
-                    item.playlist_title = info.get("playlist_title", "")
-                    item.total_videos = info.get("video_count", 0)
-                    db.update_status(
-                        item.id, ItemStatus.PENDING,
-                        playlist_title=item.playlist_title,
-                        total_videos=item.total_videos,
+            if active_count < self.max_concurrent:
+                pending = db.get_pending_items()
+                to_start = pending[: self.max_concurrent - active_count]
+                for item in to_start:
+                    downloader = Downloader()
+                    with self._lock:
+                        self._active[item.id] = downloader
+                    thread = threading.Thread(
+                        target=self._download_one,
+                        args=(item, downloader),
+                        daemon=True,
                     )
-                except Exception:
-                    item.playlist_title = item.url.rsplit("/", 1)[-1]
+                    thread.start()
 
-            try:
-                db.update_status(item.id, ItemStatus.DOWNLOADING)
-                self.on_item_update(db.get_item(item.id))
+            time.sleep(0.5)
 
-                self._downloader.run(
-                    item=item,
-                    output_dir=self.output_dir,
-                    on_progress=lambda p: self._on_progress(item.id, p),
-                )
-
-                db.update_status(
-                    item.id,
-                    ItemStatus.COMPLETED,
-                    completed_at=datetime.now(timezone.utc).isoformat(),
-                    completed_videos=item.total_videos,
-                )
-
-            except DownloadCancelled:
-                status = ItemStatus.CANCELLED if self._cancel_requested else ItemStatus.PENDING
-                self._cancel_requested = False
-                db.update_status(item.id, status)
-
-            except Exception as exc:
-                db.update_status(
-                    item.id,
-                    ItemStatus.FAILED,
-                    error=str(exc),
-                )
-
+    def _download_one(self, item: QueueItem, downloader: Downloader) -> None:
+        try:
+            db.update_status(item.id, ItemStatus.DOWNLOADING)
             self.on_item_update(db.get_item(item.id))
-            self._active_item_id = None
+
+            downloader.run(
+                item=item,
+                output_dir=self.output_dir,
+                on_progress=lambda p: self._on_progress(item.id, p),
+            )
+
+            db.update_status(item.id, ItemStatus.COMPLETED,
+                             completed_at=datetime.now(timezone.utc).isoformat())
+
+            pid = item.playlist_id
+            if pid:
+                completed = db.count_playlist_completed(pid)
+                db.update_playlist_status(pid, ItemStatus.COMPLETED,
+                                          completed_videos=completed)
+                for sibling in db.get_playlist_items(pid):
+                    db.update_status(sibling.id, sibling.status,
+                                     completed_videos=completed)
+
+        except DownloadCancelled:
+            db.update_status(item.id, ItemStatus.CANCELLED)
+
+        except Exception as exc:
+            db.update_status(item.id, ItemStatus.FAILED, error=str(exc))
+
+        finally:
+            with self._lock:
+                self._active.pop(item.id, None)
+
+        self.on_item_update(db.get_item(item.id))
 
     def _on_progress(self, item_id: str, progress: DownloadProgress) -> None:
         item = db.get_item(item_id)
         if item:
-            item.completed_videos = progress.playlist_index or 0
-            item.total_videos = max(item.total_videos, progress.playlist_count or 0)
             self.on_item_update(item)
-        self._on_progress_ext(progress)
+        self._on_progress_ext(item_id, progress)

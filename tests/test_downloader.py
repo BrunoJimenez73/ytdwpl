@@ -18,7 +18,7 @@ from app.core.models import DownloadFormat, ItemStatus, QueueItem
 
 class TestParseSize:
     def test_bytes(self):
-        assert _parse_size("1048576") == 1.0  # 1 MiB in bytes
+        assert _parse_size("1048576") == 1.0
 
     def test_mib(self):
         result = _parse_size("5.5 MiB")
@@ -30,7 +30,7 @@ class TestParseSize:
 
     def test_mb(self):
         result = _parse_size("10 MB")
-        assert abs(result - 9.5367) < 0.1  # 10 MB → MiB
+        assert abs(result - 9.5367) < 0.1
 
     def test_kib(self):
         result = _parse_size("512 KiB")
@@ -63,20 +63,13 @@ class TestDownloadProgress:
 
     def test_fields(self):
         p = DownloadProgress(
-            video_title="Test",
-            percent=50.0,
-            speed="1.5 MiB/s",
-            eta="10s",
-            playlist_index=2,
-            playlist_count=10,
-            status="downloading",
+            video_title="Test", percent=50.0, speed="1.5 MiB/s",
+            eta="10s", status="downloading",
         )
         assert p.video_title == "Test"
         assert p.percent == 50.0
         assert p.speed == "1.5 MiB/s"
         assert p.eta == "10s"
-        assert p.playlist_index == 2
-        assert p.playlist_count == 10
 
 
 class TestDownloader:
@@ -84,21 +77,6 @@ class TestDownloader:
         d = Downloader()
         d.cancel()
         assert d.is_cancelled()
-
-    def test_progress_regex_video(self):
-        line = "[download] Downloading video 1 of 5"
-        m = re.search(r'Downloading (?:video|item)\s+(\d+)\s+of\s+(\d+)', line)
-        assert m is not None
-        assert m.group(1) == "1"
-        assert m.group(2) == "5"
-
-    def test_progress_regex_item(self):
-        """yt-dlp uses 'item' for playlists, not 'video'."""
-        line = "[download] Downloading item 3 of 10"
-        m = re.search(r'Downloading (?:video|item)\s+(\d+)\s+of\s+(\d+)', line)
-        assert m is not None
-        assert m.group(1) == "3"
-        assert m.group(2) == "10"
 
     def test_destination_line_regex(self):
         line = "[download] Destination: C:\\Downloads\\Playlist\\MyVideo.mp4"
@@ -122,7 +100,6 @@ class TestDownloader:
         assert m is not None
         assert m.group(1).strip() == "45.2%"
         assert m.group(2) == "105.3MiB"
-        # group 3 captures first token after "at" (speed number without units)
         assert m.group(3) == "2.5"
 
     def test_progress_line_pattern_with_eta(self):
@@ -137,36 +114,41 @@ class TestDownloader:
 
     def test_finished_line(self):
         line = "[download] 100% of 50.0MiB in 00:30"
-        assert "[download] Finished" in line or "100%" in line
+        assert "100%" in line
 
     def test_extract_playlist_info_happy_path(self, mocker):
         fake_output = json.dumps({
             "playlist_title": "Mi Playlist",
             "playlist": "Mi Playlist",
             "title": "Video 1",
+            "url": "https://youtube.com/watch?v=abc",
         })
         mock_proc = mocker.MagicMock()
-        mock_proc.stdout = [fake_output + "\n", fake_output.replace("1", "2") + "\n"]
+        mock_proc.stdout = [fake_output + "\n", fake_output.replace("1", "2").replace("abc", "def") + "\n"]
         mock_proc.wait.return_value = 0
         mocker.patch("subprocess.Popen", return_value=mock_proc)
 
         info = extract_playlist_info("https://youtube.com/playlist?list=ABC")
         assert info["playlist_title"] == "Mi Playlist"
         assert info["video_count"] == 2
+        assert len(info["videos"]) == 2
+        assert info["videos"][0]["url"] == "https://youtube.com/watch?v=abc"
+        assert info["videos"][1]["title"] == "Video 2"
 
     def test_extract_playlist_info_fallback_title(self, mocker):
-        fake_output = json.dumps({"title": "Solo Video"})
+        fake_output = json.dumps({
+            "title": "Solo Video",
+            "url": "https://youtube.com/watch?v=abc",
+        })
         mock_proc = mocker.MagicMock()
         mock_proc.stdout = [fake_output + "\n"]
         mock_proc.wait.return_value = 0
         mocker.patch("subprocess.Popen", return_value=mock_proc)
 
-        info = extract_playlist_info(
-            "https://youtube.com/playlist?list=UNIQUE"
-        )
-        # fallback to last URL segment (includes query string since no path segment)
+        info = extract_playlist_info("https://youtube.com/playlist?list=UNIQUE")
         assert "UNIQUE" in info["playlist_title"]
         assert info["video_count"] == 1
+        assert len(info["videos"]) == 1
 
     def test_extract_playlist_info_empty_output(self, mocker):
         mock_proc = mocker.MagicMock()
@@ -177,3 +159,4 @@ class TestDownloader:
         info = extract_playlist_info("https://youtube.com/playlist?list=XYZ")
         assert info["playlist_title"] == "playlist?list=XYZ"
         assert info["video_count"] == 0
+        assert info["videos"] == []

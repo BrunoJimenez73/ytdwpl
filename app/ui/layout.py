@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import flet as ft
 
@@ -19,19 +19,18 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     page.title = "ytdwpl - YouTube Playlist Downloader"
     page.theme_mode = ft.ThemeMode.SYSTEM
     page.padding = 16
-    page.spacing = 16
+    page.spacing = 12
 
     settings = AppSettings.load()
-    output_dir = Path(settings.output_dir)
+    output_dir = Path(settings.output_dir) if settings.output_dir else output_dir
 
-    active_progress = DownloadProgress()
-    active_playlist_title = ""
-    is_paused = False
     current_tab = 0
+    _progress_data: Dict[str, DownloadProgress] = {}
 
     pending_table = ft.Container(expand=True)
     completed_table = ft.Container(expand=True)
-    progress_container = ft.Container(visible=False)
+    active_cards_col = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO)
+    active_section = ft.Container(content=active_cards_col, visible=False)
 
     def _on_tab_change(e=None) -> None:
         nonlocal current_tab
@@ -46,11 +45,28 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             ItemStatus.FAILED, ItemStatus.CANCELLED,
         )]
         completed_items = [i for i in all_items if i.status == ItemStatus.COMPLETED]
+
+        active_ids = queue.active_ids
+        active_section.visible = len(active_ids) > 0
+        cards = []
+        for aid in active_ids:
+            item = db.get_item(aid)
+            if item:
+                prog = _progress_data.get(aid, DownloadProgress())
+                cards.append(build_progress_card(
+                    item_id=aid,
+                    progress=prog,
+                    playlist_title=item.playlist_title,
+                    on_cancel=_cancel_item,
+                ))
+        active_cards_col.controls = cards
+
         pending_table.content = build_queue_table(
             items=pending_items,
             on_cancel=_cancel_item,
             on_delete=_delete_item,
             on_retry=_retry_item,
+            active_progress=_progress_data,
         )
         completed_table.content = build_queue_table(
             items=completed_items,
@@ -76,55 +92,41 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             _refresh()
 
     def _add_item(url: str, fmt: DownloadFormat) -> None:
-        queue.add_item(url, fmt)
+        queue.add_playlist(url, fmt)
         _refresh()
-
-    def _on_pause(e) -> None:
-        nonlocal is_paused
-        if is_paused:
-            queue.resume()
-            is_paused = False
-        else:
-            queue.pause()
-            is_paused = True
-        _render_progress()
-
-    def _on_cancel_active(e) -> None:
-        if queue.active_item_id:
-            queue.cancel_item(queue.active_item_id)
-            progress_container.visible = False
-            page.update()
-
-    def _handle_progress(p: DownloadProgress) -> None:
-        nonlocal active_progress
-        active_progress = p
-        _render_progress()
-
-    def _handle_item_update(item: Optional[QueueItem]) -> None:
-        nonlocal active_playlist_title
-        if item and item.id == queue.active_item_id:
-            active_playlist_title = item.playlist_title
-        _refresh()
-
-    def _render_progress() -> None:
-        has_active = queue.active_item_id is not None
-        progress_container.visible = has_active
-        if has_active:
-            progress_container.content = build_progress_card(
-                progress=active_progress,
-                playlist_title=active_playlist_title,
-                is_paused=is_paused,
-                on_pause=_on_pause,
-                on_cancel=_on_cancel_active,
-            )
-        page.update()
 
     def _on_settings_saved(new_settings: AppSettings) -> None:
         nonlocal settings
         settings = new_settings
+        queue.max_concurrent = max(1, new_settings.max_concurrent)
 
     def _open_settings(e) -> None:
         show_settings_dialog(page, settings, _on_settings_saved)
+
+    def _handle_progress(item_id: str, p: DownloadProgress) -> None:
+        _progress_data[item_id] = p
+        _render_active()
+
+    def _handle_item_update(item: Optional[QueueItem]) -> None:
+        _refresh()
+
+    def _render_active() -> None:
+        active_ids = queue.active_ids
+        active_section.visible = len(active_ids) > 0
+        cards = []
+        for aid in active_ids:
+            from app import db
+            item = db.get_item(aid)
+            if item:
+                prog = _progress_data.get(aid, DownloadProgress())
+                cards.append(build_progress_card(
+                    item_id=aid,
+                    progress=prog,
+                    playlist_title=item.playlist_title,
+                    on_cancel=_cancel_item,
+                ))
+        active_cards_col.controls = cards
+        page.update()
 
     tabs = ft.Tabs(
         length=2,
@@ -152,9 +154,10 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     )
 
     queue = QueueManager(
-        output_dir=Path(settings.output_dir),
+        output_dir=Path(settings.output_dir) if settings.output_dir else Path.home(),
         on_item_update=_handle_item_update,
         on_progress=_handle_progress,
+        max_concurrent=max(1, settings.max_concurrent),
     )
 
     settings_btn = ft.IconButton(
@@ -178,7 +181,7 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     )
 
     page.add(
-        progress_container,
+        active_section,
         tabs,
         fab,
     )

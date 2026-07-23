@@ -22,8 +22,6 @@ class DownloadProgress:
     eta: str = ""
     downloaded_mb: float = 0.0
     total_mb: float = 0.0
-    playlist_index: int = 0
-    playlist_count: int = 0
     status: str = "starting"
     log_lines: list[str] = field(default_factory=list)
 
@@ -46,15 +44,11 @@ def _resolve_ffmpeg() -> Optional[str]:
     return shutil.which("ffmpeg")
 
 
-
-
-
 def _sanitize_dirname(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", name).strip(" .")
 
 
 def extract_playlist_info(url: str) -> dict:
-    """Return playlist title and video count using a fast flat dump."""
     cmd = [
         "yt-dlp",
         "--flat-playlist",
@@ -71,26 +65,32 @@ def extract_playlist_info(url: str) -> dict:
         encoding="utf-8",
     )
     title = ""
-    count = 0
+    videos = []
     for line in proc.stdout or []:
         line = line.strip()
         if not line:
             continue
         try:
             data = json.loads(line)
-            count += 1
             if not title:
                 title = data.get("playlist_title") or data.get("playlist", "") or ""
+            v_url = data.get("url") or data.get("webpage_url") or ""
+            v_title = data.get("title") or ""
+            if v_url:
+                videos.append({"url": v_url, "title": v_title, "index": len(videos) + 1})
         except json.JSONDecodeError:
             continue
     proc.wait()
-    return {"playlist_title": title or url.rsplit("/", 1)[-1], "video_count": count}
+    return {
+        "playlist_title": title or url.rsplit("/", 1)[-1],
+        "video_count": len(videos),
+        "videos": videos,
+    }
 
 
 class Downloader:
     def __init__(self) -> None:
         self._cancel_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self._process: Optional[subprocess.Popen] = None
 
     def cancel(self) -> None:
@@ -102,9 +102,10 @@ class Downloader:
         return self._cancel_event.is_set()
 
     def _make_archive_path(self, item: QueueItem, output_dir: Path) -> Path:
+        pid = item.playlist_id or item.id
         archive_dir = output_dir / ".ytdwpl-archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
-        return archive_dir / f"{item.id}.archive.txt"
+        return archive_dir / f"{pid}.archive.txt"
 
     def run(
         self,
@@ -114,16 +115,13 @@ class Downloader:
     ) -> None:
         self._cancel_event.clear()
         archive_path = self._make_archive_path(item, output_dir)
-
         ffmpeg = _resolve_ffmpeg()
 
-        fmt = item.format
         outtmpl = str(output_dir / "%(playlist_title|Unknown)s" / "%(title)s.%(ext)s")
 
         args = [
             "yt-dlp",
             "--continue",
-            "--yes-playlist",
             "--restrict-filenames",
             "--no-overwrites",
             "--newline",
@@ -131,12 +129,13 @@ class Downloader:
             "--no-warnings",
             "--output", outtmpl,
             "--download-archive", str(archive_path),
+            "--no-playlist",
         ]
 
         if ffmpeg:
             args += ["--ffmpeg-location", os.path.dirname(ffmpeg)]
 
-        if fmt == DownloadFormat.AUDIO:
+        if item.format == DownloadFormat.AUDIO:
             args += ["--extract-audio", "--audio-format", "mp3",
                      "--audio-quality", "0",
                      "--embed-thumbnail"]
@@ -146,6 +145,11 @@ class Downloader:
         args.append(item.url)
 
         progress = DownloadProgress()
+        log_buffer: deque = deque(maxlen=100)
+        line_pattern = re.compile(
+            r'\[download\]\s+(.+?)\s+of\s+[~]?(\S+)\s+'
+            r'(?:at\s+(\S+))?\s*(?:ETA\s+(\S+))?'
+        )
 
         self._process = subprocess.Popen(
             args,
@@ -156,14 +160,6 @@ class Downloader:
             errors="replace",
         )
 
-        video_idx_re = re.compile(r'Downloading (?:video|item)\s+(\d+)\s+of\s+(\d+)')
-        log_buffer: deque = deque(maxlen=100)
-        log_counter = 0
-        line_pattern = re.compile(
-            r'\[download\]\s+(.+?)\s+of\s+[~]?(\S+)\s+'
-            r'(?:at\s+(\S+))?\s*(?:ETA\s+(\S+))?'
-        )
-
         try:
             for raw_line in self._process.stdout or []:
                 if self._cancel_event.is_set():
@@ -172,19 +168,13 @@ class Downloader:
 
                 line = raw_line.strip()
                 log_buffer.append(line)
-                log_counter += 1
 
                 should_update = True
 
                 if "[download] Destination:" in line:
                     title_part = line.split("Destination:")[-1].strip()
-                    name = Path(title_part).stem
-                    progress.video_title = name
+                    progress.video_title = Path(title_part).stem
                     progress.status = "downloading"
-
-                elif idx_m := video_idx_re.search(line):
-                    progress.playlist_index = int(idx_m.group(1))
-                    progress.playlist_count = int(idx_m.group(2))
 
                 elif m := line_pattern.search(line):
                     raw_percent_str = m.group(1).rstrip("%")

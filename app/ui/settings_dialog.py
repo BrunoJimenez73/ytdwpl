@@ -19,6 +19,12 @@ def show_settings_dialog(page: ft.Page, settings: AppSettings, on_saved):
         ],
         width=200,
     )
+    concurrent_field = ft.TextField(
+        label="Descargas simultaneas",
+        value=str(settings.max_concurrent),
+        width=100,
+        keyboard_type=ft.KeyboardType.NUMBER,
+    )
 
     def close(e):
         d.open = False
@@ -27,6 +33,10 @@ def show_settings_dialog(page: ft.Page, settings: AppSettings, on_saved):
     def save(e):
         settings.output_dir = output_field.value.strip()
         settings.format = format_dropdown.value
+        try:
+            settings.max_concurrent = max(1, int(concurrent_field.value.strip()))
+        except (ValueError, AttributeError):
+            settings.max_concurrent = 4
         settings.save()
         on_saved(settings)
         close(e)
@@ -39,6 +49,11 @@ def show_settings_dialog(page: ft.Page, settings: AppSettings, on_saved):
             output_field,
             ft.Divider(),
             format_dropdown,
+            ft.Divider(),
+            ft.Row([
+                ft.Text("Descargas simultaneas (1-10):"),
+                concurrent_field,
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         ], tight=True, spacing=10),
         actions=[
             ft.TextButton("Cancelar", on_click=close),
