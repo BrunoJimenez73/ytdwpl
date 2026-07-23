@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: ytdwpl
+Version: 0.1.0
+Summary: YouTube Playlist Downloader - Desktop app with queue management
+Requires-Python: >=3.10
+Requires-Dist: flet>=0.25.0
+Requires-Dist: yt-dlp>=2024.12.0
