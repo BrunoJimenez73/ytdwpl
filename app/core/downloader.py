@@ -118,7 +118,8 @@ class Downloader:
         archive_path = self._make_archive_path(item, output_dir)
         ffmpeg = _resolve_ffmpeg()
 
-        outtmpl = str(output_dir / "%(playlist_title|Unknown)s" / "%(title)s.%(ext)s")
+        folder = _sanitize_dirname(item.playlist_title) if item.playlist_title else ""
+        outtmpl = str(output_dir / folder / "%(title)s.%(ext)s")
 
         args = [
             "yt-dlp",

@@ -20,7 +20,13 @@ from app.ui.settings_dialog import show_settings_dialog
 def _open_file_desktop(file_path: str) -> None:
     p = Path(file_path)
     if not p.exists():
-        return
+        alt = Path(file_path.replace("/", "\\"))
+        if alt.exists():
+            p = alt
+        else:
+            print(f"[open] file not found: {file_path}")
+            return
+    print(f"[open] opening: {p}")
     try:
         if sys.platform == "win32":
             os.startfile(str(p))
@@ -28,8 +34,8 @@ def _open_file_desktop(file_path: str) -> None:
             subprocess.Popen(["open", str(p)])
         else:
             subprocess.Popen(["xdg-open", str(p)])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[open] error: {e}")
 
 
 def build_app(page: ft.Page, output_dir: Path) -> None:

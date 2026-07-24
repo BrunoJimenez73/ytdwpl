@@ -60,6 +60,9 @@ def build_queue_table(
         else:
             standalone.append(item)
 
+    for pid in groups:
+        _expanded_playlist_ids.add(pid)
+
     rows: List[ft.Control] = []
 
     for pid, videos in groups.items():
