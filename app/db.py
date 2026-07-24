@@ -55,7 +55,7 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(queue_items)").fetchall()}
-    for col in ("video_title", "playlist_id", "file_path", "selected"):
+    for col in ("video_title", "playlist_id", "file_path", "selected", "playlist_url"):
         if col not in existing:
             default = "1" if col == "selected" else "''"
             colltype = "INTEGER" if col == "selected" else "TEXT"
@@ -65,8 +65,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def reset_stale_downloads() -> None:
     conn = _conn()
     conn.execute(
-        "UPDATE queue_items SET status = ? WHERE status = ?",
-        (ItemStatus.PENDING.value, ItemStatus.DOWNLOADING.value),
+        "UPDATE queue_items SET status = ? WHERE status IN (?, ?)",
+        (ItemStatus.PENDING.value, ItemStatus.DOWNLOADING.value, ItemStatus.QUEUED.value),
     )
     conn.commit()
 
@@ -76,11 +76,12 @@ def add_item(item: QueueItem) -> None:
     conn.execute(
         """INSERT INTO queue_items
            (id, url, format, status, playlist_title, video_title, playlist_id,
-            selected, created_at, file_path, archive_path, total_videos)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            selected, created_at, file_path, archive_path, total_videos, playlist_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (item.id, item.url, item.format.value, item.status.value,
          item.playlist_title, item.video_title, item.playlist_id,
-         int(item.selected), item.created_at, item.file_path, item.archive_path, item.total_videos),
+         int(item.selected), item.created_at, item.file_path, item.archive_path, item.total_videos,
+         item.playlist_url),
     )
     conn.commit()
 
@@ -93,22 +94,21 @@ def get_all_items() -> List[QueueItem]:
     return [_row_to_item(r) for r in rows]
 
 
-def get_pending_items() -> List[QueueItem]:
+def get_items_by_status(status: ItemStatus) -> List[QueueItem]:
     conn = _conn()
     rows = conn.execute(
         "SELECT * FROM queue_items WHERE status = ? ORDER BY created_at ASC",
-        (ItemStatus.PENDING.value,),
+        (status.value,),
     ).fetchall()
     return [_row_to_item(r) for r in rows]
+
+
+def get_pending_items() -> List[QueueItem]:
+    return get_items_by_status(ItemStatus.PENDING)
 
 
 def get_downloading_items() -> List[QueueItem]:
-    conn = _conn()
-    rows = conn.execute(
-        "SELECT * FROM queue_items WHERE status = ? ORDER BY created_at ASC",
-        (ItemStatus.DOWNLOADING.value,),
-    ).fetchall()
-    return [_row_to_item(r) for r in rows]
+    return get_items_by_status(ItemStatus.DOWNLOADING)
 
 
 def get_playlist_items(playlist_id: str) -> List[QueueItem]:
@@ -144,6 +144,25 @@ def update_playlist_status(playlist_id: str, status: ItemStatus, **extra) -> Non
     values.append(playlist_id)
     conn.execute(
         f"UPDATE queue_items SET {', '.join(fields)} WHERE playlist_id = ?", values
+    )
+    conn.commit()
+
+
+def update_playlist_status_selected(playlist_id: str, from_status: ItemStatus, to_status: ItemStatus) -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE queue_items SET status = ? WHERE playlist_id = ? AND selected = 1 AND status = ?",
+        (to_status.value, playlist_id, from_status.value),
+    )
+    conn.commit()
+
+
+def update_playlist_status_selected_multi(playlist_id: str, from_statuses: list, to_status: ItemStatus) -> None:
+    conn = _conn()
+    placeholders = ",".join("?" for _ in from_statuses)
+    conn.execute(
+        f"UPDATE queue_items SET status = ?, selected = 1 WHERE playlist_id = ? AND selected = 1 AND status IN ({placeholders})",
+        (to_status.value, playlist_id, *[s.value for s in from_statuses]),
     )
     conn.commit()
 
@@ -186,6 +205,43 @@ def update_playlist_progress(playlist_id: str, completed_videos: int) -> None:
     conn.commit()
 
 
+def update_playlist_select_all(playlist_id: str, selected: bool) -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE queue_items SET selected = ? WHERE playlist_id = ?",
+        (int(selected), playlist_id),
+    )
+    conn.commit()
+
+
+def get_playlist_url(playlist_id: str) -> str:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT playlist_url FROM queue_items WHERE playlist_id = ? AND playlist_url != '' LIMIT 1",
+        (playlist_id,),
+    ).fetchone()
+    return row["playlist_url"] if row else ""
+
+
+def update_playlist_item_videos(playlist_id: str, videos: list) -> None:
+    conn = _conn()
+    existing = conn.execute(
+        "SELECT id, url FROM queue_items WHERE playlist_id = ?",
+        (playlist_id,),
+    ).fetchall()
+    url_map = {row["url"]: row["id"] for row in existing}
+    for v in videos:
+        vid_url = v.get("url") or v.get("webpage_url") or ""
+        matched_id = url_map.get(vid_url)
+        if matched_id:
+            new_title = v.get("title", "")
+            conn.execute(
+                "UPDATE queue_items SET video_title = ? WHERE id = ?",
+                (new_title, matched_id),
+            )
+    conn.commit()
+
+
 def count_playlist_completed(playlist_id: str) -> int:
     conn = _conn()
     row = conn.execute(
@@ -212,4 +268,5 @@ def _row_to_item(row: sqlite3.Row) -> QueueItem:
         selected=bool(row["selected"]) if "selected" in row.keys() else True,
         total_videos=row["total_videos"] or 0,
         completed_videos=row["completed_videos"] or 0,
+        playlist_url=row["playlist_url"] or "",
     )

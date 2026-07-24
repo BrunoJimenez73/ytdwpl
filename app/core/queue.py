@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from app import db
+from app.core.constants import QUEUE_POLL_INTERVAL, S
 from app.core.downloader import (
     DownloadCancelled,
     DownloadProgress,
@@ -70,7 +71,7 @@ class QueueManager:
         playlist_id = QueueItem.new(url, fmt).id
         temp = QueueItem.new(
             url, fmt,
-            playlist_title="Obteniendo informacion...",
+            playlist_title=S.ADD_PLAYLIST_FETCHING,
             playlist_id=playlist_id,
         )
         db.add_item(temp)
@@ -92,6 +93,7 @@ class QueueManager:
                         playlist_title=title,
                         playlist_id=playlist_id,
                         total_videos=total,
+                        playlist_url=url,
                     )
                     db.add_item(item)
                     self.on_item_update(item)
@@ -99,7 +101,7 @@ class QueueManager:
             except Exception:
                 item = QueueItem.new(
                     url=url, fmt=fmt,
-                    playlist_title="Error al obtener playlist",
+                    playlist_title=S.ADD_PLAYLIST_ERROR,
                     playlist_id=playlist_id,
                 )
                 db.add_item(item)
@@ -120,7 +122,7 @@ class QueueManager:
             if dl:
                 dl.cancel()
         item = db.get_item(item_id)
-        if item and item.status in (ItemStatus.PENDING, ItemStatus.DOWNLOADING):
+        if item and item.status in (ItemStatus.PENDING, ItemStatus.QUEUED, ItemStatus.DOWNLOADING):
             db.update_status(item_id, ItemStatus.CANCELLED)
             self.on_item_update(db.get_item(item_id))
 
@@ -146,6 +148,62 @@ class QueueManager:
         db.delete_playlist_selected(playlist_id)
         self.on_item_update(None)
 
+    def start_selected(self, playlist_id: str) -> None:
+        db.update_playlist_status_selected(
+            playlist_id, from_status=ItemStatus.PENDING, to_status=ItemStatus.QUEUED,
+        )
+        for item in db.get_playlist_items(playlist_id):
+            self.on_item_update(item)
+
+    def retry_selected(self, playlist_id: str) -> None:
+        db.update_playlist_status_selected_multi(
+            playlist_id,
+            from_statuses=[ItemStatus.FAILED, ItemStatus.CANCELLED],
+            to_status=ItemStatus.QUEUED,
+        )
+        for item in db.get_playlist_items(playlist_id):
+            self.on_item_update(item)
+
+    def pause_playlist(self, playlist_id: str) -> None:
+        for item in db.get_playlist_items(playlist_id):
+            if item.status == ItemStatus.QUEUED:
+                db.update_status(item.id, ItemStatus.PENDING)
+                self.on_item_update(item)
+            elif item.status == ItemStatus.DOWNLOADING:
+                self.cancel_item(item.id)
+
+    def resume_playlist(self, playlist_id: str) -> None:
+        for item in db.get_playlist_items(playlist_id):
+            if item.status == ItemStatus.PENDING:
+                db.update_status(item.id, ItemStatus.QUEUED)
+                self.on_item_update(item)
+
+    def toggle_select_all(self, playlist_id: str, selected: bool) -> None:
+        db.update_playlist_select_all(playlist_id, selected)
+        for item in db.get_playlist_items(playlist_id):
+            self.on_item_update(item)
+
+    def reload_playlist(self, playlist_id: str) -> None:
+        def _reload() -> None:
+            p_url = db.get_playlist_url(playlist_id)
+            if not p_url:
+                return
+            try:
+                info = extract_playlist_info(p_url)
+                title = info.get("playlist_title", "")
+                videos = info.get("videos", [])
+                if title:
+                    for item in db.get_playlist_items(playlist_id):
+                        if item.playlist_title != title:
+                            db.update_status(item.id, item.status, playlist_title=title)
+                db.update_playlist_item_videos(playlist_id, videos)
+                for item in db.get_playlist_items(playlist_id):
+                    self.on_item_update(item)
+            except Exception:
+                pass
+
+        threading.Thread(target=_reload, daemon=True).start()
+
     def _loop(self) -> None:
         while self._running:
             self._pause_event.wait()
@@ -158,8 +216,8 @@ class QueueManager:
                 active_count = len(self._active)
 
             if active_count < self.max_concurrent:
-                pending = [it for it in db.get_pending_items() if it.selected]
-                to_start = pending[: self.max_concurrent - active_count]
+                queued = [it for it in db.get_items_by_status(ItemStatus.QUEUED) if it.selected]
+                to_start = queued[: self.max_concurrent - active_count]
                 for item in to_start:
                     downloader = Downloader()
                     with self._lock:
@@ -171,7 +229,7 @@ class QueueManager:
                     )
                     thread.start()
 
-            time.sleep(0.5)
+            time.sleep(QUEUE_POLL_INTERVAL)
 
     def _download_one(self, item: QueueItem, downloader: Downloader) -> None:
         try:

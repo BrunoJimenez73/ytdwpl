@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from app.core.constants import LOG_BUFFER_MAXLEN
 from app.core.models import DownloadFormat, QueueItem
 
 
@@ -147,7 +148,7 @@ class Downloader:
         args.append(item.url)
 
         progress = DownloadProgress()
-        log_buffer: deque = deque(maxlen=100)
+        log_buffer: deque = deque(maxlen=LOG_BUFFER_MAXLEN)
         line_pattern = re.compile(
             r'\[download\]\s+(.+?)\s+of\s+[~]?(\S+)\s+'
             r'(?:at\s+(\S+))?\s*(?:ETA\s+(\S+))?'
@@ -223,7 +224,10 @@ class Downloader:
             raise RuntimeError(f"Download failed: {e}") from e
 
         if self._process.returncode not in (0, 2) and not self._cancel_event.is_set():
-            raise RuntimeError(f"yt-dlp exited with code {self._process.returncode}")
+            error_lines = [l for l in log_buffer if "ERROR:" in l]
+            extra = "\n".join(error_lines[-3:]) if error_lines else ""
+            detail = f": {extra}" if extra else ""
+            raise RuntimeError(f"yt-dlp exited with code {self._process.returncode}{detail}")
 
 
 def _parse_size(raw: str) -> float:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 
 import flet as ft
 
+from app.core.constants import S, AppTheme
 from app.core.models import DownloadFormat
 
 
@@ -12,26 +13,26 @@ def show_add_dialog(
     on_submit: Callable[[str, DownloadFormat], None],
 ) -> None:
     url_field = ft.TextField(
-        label="URL de la playlist",
-        hint_text="https://youtube.com/playlist?list=...",
+        label=S.ADD_DIALOG_URL_LABEL,
+        hint_text=S.ADD_DIALOG_URL_HINT,
         width=500,
         autofocus=True,
     )
     format_dropdown = ft.Dropdown(
-        label="Formato",
+        label=S.ADD_DIALOG_FORMAT_LABEL,
         options=[
-            ft.dropdown.Option(DownloadFormat.VIDEO.value, "Video (MP4)"),
-            ft.dropdown.Option(DownloadFormat.AUDIO.value, "Audio (MP3)"),
+            ft.dropdown.Option(DownloadFormat.VIDEO.value, S.ADD_DIALOG_VIDEO_OPTION),
+            ft.dropdown.Option(DownloadFormat.AUDIO.value, S.ADD_DIALOG_AUDIO_OPTION),
         ],
         value=DownloadFormat.VIDEO.value,
         width=200,
     )
-    error_text = ft.Text(value="", color=ft.Colors.RED)
+    error_text = ft.Text(value="", color=AppTheme.ERROR)
 
-    def submit_click(e):
+    def submit_click(e) -> None:
         url = url_field.value.strip() if url_field.value else ""
         if not url:
-            error_text.value = "Ingresa una URL válida"
+            error_text.value = S.ADD_DIALOG_ERROR_EMPTY_URL
             page.update()
             return
         fmt = DownloadFormat(format_dropdown.value or DownloadFormat.VIDEO.value)
@@ -40,19 +41,15 @@ def show_add_dialog(
 
     dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Agregar Playlist"),
+        title=ft.Text(S.ADD_DIALOG_TITLE),
         content=ft.Column(
-            [
-                url_field,
-                format_dropdown,
-                error_text,
-            ],
+            [url_field, format_dropdown, error_text],
             tight=True,
             spacing=12,
         ),
         actions=[
-            ft.TextButton("Cancelar", on_click=lambda e: page.pop_dialog()),
-            ft.FilledButton("Agregar", on_click=submit_click),
+            ft.TextButton(S.ADD_DIALOG_CANCEL, on_click=lambda e: page.pop_dialog()),
+            ft.FilledButton(S.ADD_DIALOG_SUBMIT, on_click=submit_click),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )

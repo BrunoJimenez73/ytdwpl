@@ -13,6 +13,7 @@ class DownloadFormat(str, Enum):
 
 class ItemStatus(str, Enum):
     PENDING = "pending"
+    QUEUED = "queued"
     DOWNLOADING = "downloading"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -36,6 +37,7 @@ class QueueItem:
     selected: bool = True
     total_videos: int = 0
     completed_videos: int = 0
+    playlist_url: str = ""
 
     @classmethod
     def new(
@@ -48,6 +50,7 @@ class QueueItem:
         playlist_id: str = "",
         selected: bool = True,
         total_videos: int = 0,
+        playlist_url: str = "",
     ) -> QueueItem:
         now = datetime.now(timezone.utc).isoformat()
         return cls(
@@ -61,4 +64,5 @@ class QueueItem:
             created_at=now,
             selected=selected,
             total_videos=total_videos,
+            playlist_url=playlist_url,
         )
