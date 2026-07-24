@@ -34,6 +34,8 @@ def build_queue_table(
     on_toggle_selected: Callable[[str], None],
     on_refresh: Callable[[], None],
     on_cancel_playlist: Optional[Callable[[str], None]] = None,
+    on_delete_selected: Optional[Callable[[str], None]] = None,
+    on_open_file: Optional[Callable[[str], None]] = None,
     active_progress: Optional[Dict[str, DownloadProgress]] = None,
 ) -> ft.Control:
     active_progress = active_progress or {}
@@ -69,6 +71,7 @@ def build_queue_table(
                 on_refresh(),
             ),
             on_delete_playlist=on_cancel_playlist,
+            on_delete_selected=on_delete_selected,
         )
         rows.append(header)
         if expanded:
@@ -76,14 +79,14 @@ def build_queue_table(
                 prog = active_progress.get(v.id)
                 rows.append(_build_video_row(
                     v, prog, on_cancel, on_delete,
-                    on_retry, on_toggle_selected,
+                    on_retry, on_toggle_selected, on_open_file,
                 ))
 
     for item in standalone:
         prog = active_progress.get(item.id)
         rows.append(_build_video_row(
             item, prog, on_cancel, on_delete,
-            on_retry, on_toggle_selected,
+            on_retry, on_toggle_selected, on_open_file,
         ))
 
     return ft.ListView(controls=rows, spacing=1, expand=True, padding=2)
@@ -95,6 +98,7 @@ def _build_playlist_header(
     expanded: bool,
     on_toggle: Callable[[], None],
     on_delete_playlist: Optional[Callable[[str], None]],
+    on_delete_selected: Optional[Callable[[str], None]],
 ) -> ft.Control:
     title = videos[0].playlist_title if videos and videos[0].playlist_title else "Playlist"
     total = len(videos)
@@ -113,14 +117,23 @@ def _build_playlist_header(
 
     icon = ft.Icons.EXPAND_MORE if expanded else ft.Icons.CHEVRON_RIGHT
 
-    delete_btn = ft.Container()
+    actions = ft.Row(spacing=0)
+    if on_delete_selected:
+        has_checked = any(v.selected for v in videos)
+        if has_checked:
+            actions.controls.append(ft.IconButton(
+                ft.Icons.CHECKLIST,
+                tooltip="Borrar marcados",
+                icon_size=18,
+                on_click=lambda e: on_delete_selected(playlist_id),
+            ))
     if on_delete_playlist:
-        delete_btn = ft.IconButton(
+        actions.controls.append(ft.IconButton(
             ft.Icons.DELETE_OUTLINE,
             tooltip="Eliminar playlist",
             icon_size=18,
             on_click=lambda e: on_delete_playlist(playlist_id),
-        )
+        ))
 
     return ft.Container(
         content=ft.Row([
@@ -129,7 +142,7 @@ def _build_playlist_header(
                 ft.Text(title, weight=ft.FontWeight.W_600, size=14),
                 ft.Text(subtitle, size=11, color=ft.Colors.GREY_600),
             ], spacing=1, tight=True, expand=True),
-            delete_btn,
+            actions,
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
         on_click=lambda e: on_toggle(),
         padding=ft.Padding(left=8, top=6, right=4, bottom=6),
@@ -145,6 +158,7 @@ def _build_video_row(
     on_delete: Callable[[str], None],
     on_retry: Callable[[str], None],
     on_toggle_selected: Callable[[str], None],
+    on_open_file: Optional[Callable[[str], None]],
 ) -> ft.Control:
     label, color = _STATUS_LABELS.get(item.status, (item.status.value, ft.Colors.GREY))
     is_finished = item.status in (ItemStatus.COMPLETED, ItemStatus.FAILED, ItemStatus.CANCELLED)
@@ -194,6 +208,18 @@ def _build_video_row(
     elif item.status == ItemStatus.COMPLETED:
         progress_text = "\u2713 Completa"
 
+    is_completed_file = item.status == ItemStatus.COMPLETED and bool(item.file_path)
+    if is_completed_file and on_open_file:
+        title_control = ft.TextButton(
+            content=ft.Text(video_name, size=12, overflow=ft.TextOverflow.ELLIPSIS,
+                            color=ft.Colors.PRIMARY),
+            on_click=lambda e, p=item.file_path: on_open_file(p),
+            style=ft.ButtonStyle(padding=0, bgcolor=ft.Colors.TRANSPARENT),
+            tooltip="Abrir archivo",
+        )
+    else:
+        title_control = ft.Text(video_name, size=12, overflow=ft.TextOverflow.ELLIPSIS)
+
     actions = []
     if item.status == ItemStatus.PENDING:
         actions.append(_action_btn(ft.Icons.CANCEL_OUTLINED, "Cancelar",
@@ -209,7 +235,7 @@ def _build_video_row(
         content=ft.Row([
             chk,
             ft.Column([
-                ft.Text(video_name, size=12, overflow=ft.TextOverflow.ELLIPSIS),
+                title_control,
                 ft.Row([
                     ft.Text(fmt_label, size=10, color=ft.Colors.GREY_500),
                     ft.Container(

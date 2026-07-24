@@ -168,6 +168,15 @@ def delete_playlist(playlist_id: str) -> None:
     conn.commit()
 
 
+def delete_playlist_selected(playlist_id: str) -> None:
+    conn = _conn()
+    conn.execute(
+        "DELETE FROM queue_items WHERE playlist_id = ? AND selected = 1",
+        (playlist_id,),
+    )
+    conn.commit()
+
+
 def update_playlist_progress(playlist_id: str, completed_videos: int) -> None:
     conn = _conn()
     conn.execute(

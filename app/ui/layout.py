@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -12,6 +15,21 @@ from app.core.settings import AppSettings
 from app.ui.add_dialog import show_add_dialog
 from app.ui.queue_table import build_queue_table
 from app.ui.settings_dialog import show_settings_dialog
+
+
+def _open_file_desktop(file_path: str) -> None:
+    p = Path(file_path)
+    if not p.exists():
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(p))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(p)])
+        else:
+            subprocess.Popen(["xdg-open", str(p)])
+    except Exception:
+        pass
 
 
 def build_app(page: ft.Page, output_dir: Path) -> None:
@@ -48,6 +66,7 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             on_toggle_selected=_toggle_selected,
             on_refresh=_refresh,
             on_cancel_playlist=_cancel_playlist,
+            on_open_file=_open_file_desktop,
             active_progress=_progress_data,
         )
         completed_table.content = build_queue_table(
@@ -57,6 +76,8 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             on_retry=_retry_item,
             on_toggle_selected=_toggle_selected,
             on_refresh=_refresh,
+            on_delete_selected=_delete_selected_playlist,
+            on_open_file=_open_file_desktop,
         )
         page.update()
 
@@ -70,6 +91,10 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
 
     def _delete_item(item_id: str) -> None:
         queue.delete_item(item_id)
+        _refresh()
+
+    def _delete_selected_playlist(playlist_id: str) -> None:
+        queue.delete_selected_playlist(playlist_id)
         _refresh()
 
     def _retry_item(item_id: str) -> None:

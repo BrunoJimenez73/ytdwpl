@@ -139,6 +139,13 @@ class QueueManager:
         db.delete_playlist(playlist_id)
         self.on_item_update(None)
 
+    def delete_selected_playlist(self, playlist_id: str) -> None:
+        for item in db.get_playlist_items(playlist_id):
+            if item.selected:
+                self.cancel_item(item.id)
+        db.delete_playlist_selected(playlist_id)
+        self.on_item_update(None)
+
     def _loop(self) -> None:
         while self._running:
             self._pause_event.wait()
