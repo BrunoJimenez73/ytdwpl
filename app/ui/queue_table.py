@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
@@ -37,11 +38,12 @@ def build_queue_table(
     on_delete_selected: Optional[Callable[[str], None]] = None,
     on_open_file: Optional[Callable[[str], None]] = None,
     active_progress: Optional[Dict[str, DownloadProgress]] = None,
+    list_ref: Optional[ft.Ref[ft.ListView]] = None,
 ) -> ft.Control:
     active_progress = active_progress or {}
 
     if not items:
-        return ft.Container(
+        c = ft.Container(
             content=ft.Column([
                 ft.Icon(ft.Icons.INBOX, size=48, color=ft.Colors.GREY_400),
                 ft.Text("No hay elementos en la lista",
@@ -51,6 +53,9 @@ def build_queue_table(
             padding=ft.Padding(left=0, top=60, right=0, bottom=0),
             expand=True,
         )
+        if list_ref:
+            list_ref.current = None
+        return c
 
     groups: Dict[str, List[QueueItem]] = {}
     standalone: List[QueueItem] = []
@@ -92,7 +97,10 @@ def build_queue_table(
             on_retry, on_toggle_selected, on_open_file,
         ))
 
-    return ft.ListView(controls=rows, spacing=1, expand=True, padding=2)
+    lv = ft.ListView(controls=rows, spacing=1, expand=True, padding=2)
+    if list_ref:
+        list_ref.current = lv
+    return lv
 
 
 def _build_playlist_header(

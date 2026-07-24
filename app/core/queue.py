@@ -209,7 +209,4 @@ class QueueManager:
     def _on_progress(self, item_id: str, progress: DownloadProgress) -> None:
         if progress.file_path:
             self._file_paths[item_id] = progress.file_path
-        item = db.get_item(item_id)
-        if item:
-            self.on_item_update(item)
         self._on_progress_ext(item_id, progress)
