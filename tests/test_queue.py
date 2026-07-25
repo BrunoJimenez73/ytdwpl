@@ -114,6 +114,28 @@ class TestQueueManager:
         items = db.get_all_items()
         assert len(items) == 0
 
+    def test_add_playlist_preserves_expansion_error(self, monkeypatch):
+        import app.core.queue
+        monkeypatch.setattr(
+            app.core.queue,
+            "extract_playlist_info",
+            lambda url: (_ for _ in ()).throw(RuntimeError("network failed")),
+        )
+        queue = QueueManager(
+            output_dir=Path("/tmp/ytdwpl"),
+            on_item_update=MagicMock(),
+            on_progress=lambda i, p: None,
+            max_concurrent=2,
+        )
+        queue._running = False
+        queue.add_playlist("https://youtube.com/playlist?list=ERROR", DownloadFormat.VIDEO)
+        import time
+        time.sleep(0.5)
+        items = db.get_all_items()
+        assert len(items) == 1
+        assert items[0].status == ItemStatus.FAILED
+        assert "network failed" in items[0].error
+
     def test_cancel_pending_item(self, queue: QueueManager):
         item = QueueItem.new("https://example.com/v1", DownloadFormat.VIDEO)
         db.add_item(item)
@@ -135,9 +157,27 @@ class TestQueueManager:
         queue.resume()
         assert queue.is_paused is False
 
+    def test_pause_and_resume_queued_item(self, queue: QueueManager):
+        item = QueueItem.new("https://example.com/v1", DownloadFormat.VIDEO)
+        db.add_item(item)
+        db.update_status(item.id, ItemStatus.QUEUED)
+
+        queue.pause()
+        assert db.get_item(item.id).status == ItemStatus.PAUSED
+
+        queue.resume()
+        assert db.get_item(item.id).status == ItemStatus.QUEUED
+
     def test_active_ids_starts_empty(self, queue: QueueManager):
         assert queue.active_ids == []
 
     def test_stop_cancels_all(self, queue: QueueManager):
         queue.stop()
         assert queue._running is False
+
+    def test_start_is_idempotent(self, queue: QueueManager):
+        queue.start()
+        first_thread = queue._thread
+        queue.start()
+        assert queue._thread is first_thread
+        queue.stop()

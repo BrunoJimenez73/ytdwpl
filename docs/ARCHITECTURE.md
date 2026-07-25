@@ -9,7 +9,7 @@ UI (Flet) ──→ QueueManager ──→ Downloader (yt-dlp subprocess) ──
    └──── progress_callback ← stdout parser ← stdout pipe ───────────┘
 ```
 
-1. El usuario agrega una URL → `QueueManager.add_item()` → inserta en SQLite + hilo async para `extract_playlist_info()`.
+1. El usuario agrega una URL → `QueueManager.add_playlist()` → hilo async para `extract_playlist_info()`.
 2. `QueueManager._loop()` (hilo worker) toma el primer item `pending` y crea un `Downloader`.
 3. `Downloader.run()` lanza `yt-dlp` como subproceso y parsea stdout línea por línea.
 4. Cada línea de progreso → `ProgressCallback` → `QueueManager._on_progress()` → actualiza UI.
@@ -18,25 +18,33 @@ UI (Flet) ──→ QueueManager ──→ Downloader (yt-dlp subprocess) ──
 ## Procesos
 
 - **Main thread**: UI de Flet (event loop). Las actualizaciones desde otros hilos se hacen con `page.update()`.
-- **Worker thread**: `QueueManager._loop()` — procesa la cola secuencialmente.
+- **Scheduler thread**: `QueueManager._loop()` — asigna slots y despierta ante
+  cambios de cola; cada descarga se ejecuta mediante `ThreadPoolExecutor`.
 - **Async thread**: `extract_playlist_info()` corre en un hilo separado para no bloquear ni la UI ni la cola.
 
 ## Estado de items
 
 ```
-PENDING ──→ DOWNLOADING ──→ COMPLETED
-                │
-                ├──→ CANCELLED
-                └──→ FAILED ──→ PENDING (reintento manual)
+PENDING ──→ QUEUED ──→ DOWNLOADING ──→ COMPLETED
+                         │              │
+                         ├──→ PAUSED   └──→ PARTIAL
+                         ├──→ CANCELLED
+                         └──→ FAILED ──→ QUEUED (reintento manual)
+PAUSED ──→ QUEUED
 ```
 
-Al iniciar la app, los items en estado `DOWNLOADING` se resetan a `PENDING`.
+Al iniciar la app, los items en estado `DOWNLOADING` y `QUEUED` se resetan a
+`PENDING`; los items `PAUSED` permanecen pausados.
 
 ## Persistencia
 
-- **SQLite**: `~/.ytdwpl/queue.db` — WAL mode, `busy_timeout=5000`, conexión por hilo (`threading.local()`).
+- **SQLite**: `~/.ytdwpl/queue.db` — WAL mode, `busy_timeout=5000`, conexión por hilo (`threading.local()`). El esquema usa `PRAGMA user_version`, índices por estado/playlist y una reclamación atómica `QUEUED → DOWNLOADING`.
 - **Settings**: `~/.ytdwpl/settings.json` — JSON simple con `output_dir` y `format`.
-- **Download archive**: `{output_dir}/.ytdwpl-archive/{item_id}.archive.txt` — archivo de yt-dlp para evitar redescargas.
+- **Logs**: `~/.ytdwpl/app.log` — rotación limitada para errores de expansión,
+  recarga y workers.
+- **Download archive**: `{output_dir}/.ytdwpl-archive/{playlist_id}.archive.txt` —
+  archivo de yt-dlp protegido por un lock por playlist para evitar escrituras
+  simultáneas.
 
 ## Downloader detallado
 

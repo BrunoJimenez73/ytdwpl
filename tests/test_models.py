@@ -16,7 +16,9 @@ class TestItemStatus:
     def test_values(self):
         assert ItemStatus.PENDING.value == "pending"
         assert ItemStatus.DOWNLOADING.value == "downloading"
+        assert ItemStatus.PAUSED.value == "paused"
         assert ItemStatus.COMPLETED.value == "completed"
+        assert ItemStatus.PARTIAL.value == "partial"
         assert ItemStatus.FAILED.value == "failed"
         assert ItemStatus.CANCELLED.value == "cancelled"
 

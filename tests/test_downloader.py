@@ -73,6 +73,11 @@ class TestDownloadProgress:
 
 
 class TestDownloader:
+    def test_archive_lock_is_shared_by_playlist(self, tmp_path: Path):
+        first = QueueItem.new("https://example.com/1", DownloadFormat.VIDEO, playlist_id="p1")
+        second = QueueItem.new("https://example.com/2", DownloadFormat.VIDEO, playlist_id="p1")
+        assert Downloader.archive_lock(first, tmp_path) is Downloader.archive_lock(second, tmp_path)
+
     def test_cancel_before_run(self):
         d = Downloader()
         d.cancel()

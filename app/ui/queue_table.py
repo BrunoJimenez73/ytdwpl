@@ -82,6 +82,7 @@ def build_queue_table(config: TableConfig) -> ft.Control:
             ),
             on_delete_playlist=config.on_delete_playlist,
             on_delete_selected=config.on_delete_selected,
+            on_cancel_playlist=config.on_cancel_playlist,
             on_start_playlist=config.on_start_playlist,
             on_pause_playlist=config.on_pause_playlist,
             on_toggle_select_all=config.on_toggle_select_all,
@@ -123,6 +124,7 @@ def _build_playlist_header(
     on_toggle: Callable[[], None],
     on_delete_playlist: Optional[Callable[[str], None]],
     on_delete_selected: Optional[Callable[[str], None]],
+    on_cancel_playlist: Optional[Callable[[str], None]] = None,
     on_start_playlist: Optional[Callable[[str], None]] = None,
     on_pause_playlist: Optional[Callable[[str], None]] = None,
     on_toggle_select_all: Optional[Callable[[str, bool], None]] = None,
@@ -133,6 +135,9 @@ def _build_playlist_header(
     total = len(videos)
     completed = sum(1 for v in videos if v.status == ItemStatus.COMPLETED)
     pending = sum(1 for v in videos if v.status == ItemStatus.PENDING)
+    queued = sum(1 for v in videos if v.status == ItemStatus.QUEUED)
+    paused = sum(1 for v in videos if v.status == ItemStatus.PAUSED)
+    partial = sum(1 for v in videos if v.status == ItemStatus.PARTIAL)
     failed = sum(1 for v in videos if v.status == ItemStatus.FAILED)
 
     subtitle_parts = []
@@ -140,9 +145,16 @@ def _build_playlist_header(
         subtitle_parts.append(f"{completed}{S.CHECK_MARK}")
     if pending:
         subtitle_parts.append(S.SUBTITLE_PENDING.format(pending))
+    if queued:
+        subtitle_parts.append(S.SUBTITLE_QUEUED.format(queued))
+    if paused:
+        subtitle_parts.append(S.SUBTITLE_PAUSED.format(paused))
+    if partial:
+        subtitle_parts.append(S.SUBTITLE_PARTIAL.format(partial))
     if failed:
         subtitle_parts.append(S.SUBTITLE_FAILED.format(failed))
     subtitle = subtitle_parts if subtitle_parts else [f"{total} videos"]
+    progress_value = completed / total if total else None
 
     icon = ft.Icons.EXPAND_MORE if expanded else ft.Icons.CHEVRON_RIGHT
 
@@ -150,6 +162,7 @@ def _build_playlist_header(
         v.status in (ItemStatus.QUEUED, ItemStatus.DOWNLOADING)
         for v in videos
     )
+    has_expanding = any(v.status == ItemStatus.EXPANDING for v in videos)
     has_selected_pending = any(
         v.status == ItemStatus.PENDING and v.selected
         for v in videos
@@ -176,7 +189,10 @@ def _build_playlist_header(
         ))
 
     if on_retry_selected:
-        has_failed = any(v.status in (ItemStatus.FAILED, ItemStatus.CANCELLED) and v.selected for v in videos)
+        has_failed = any(
+            v.status in (ItemStatus.FAILED, ItemStatus.PARTIAL, ItemStatus.CANCELLED)
+            and v.selected for v in videos
+        )
         if has_failed:
             actions.controls.append(ft.IconButton(
                 ft.Icons.REPLAY,
@@ -185,7 +201,14 @@ def _build_playlist_header(
                 on_click=lambda e, p=playlist_id: on_retry_selected(p),
             ))
 
-    if has_queued_or_downloading and on_pause_playlist:
+    if has_expanding and on_cancel_playlist:
+        actions.controls.append(ft.IconButton(
+            ft.Icons.CANCEL_OUTLINED,
+            tooltip=S.TOOLTIP_CANCEL,
+            icon_size=18,
+            on_click=lambda e, p=playlist_id: on_cancel_playlist(p),
+        ))
+    elif has_queued_or_downloading and on_pause_playlist:
         actions.controls.append(ft.IconButton(
             ft.Icons.PAUSE,
             tooltip=S.TOOLTIP_PAUSE,
@@ -223,6 +246,12 @@ def _build_playlist_header(
             ft.Column([
                 ft.Text(title, weight=ft.FontWeight.W_600, size=14),
                 ft.Text("  ".join(subtitle), size=11, color=AppTheme.GREY_600),
+                ft.ProgressBar(
+                    value=progress_value,
+                    visible=progress_value is not None and total > 1,
+                    height=3,
+                    color=AppTheme.GREEN,
+                ),
             ], spacing=1, tight=True, expand=True),
             actions,
         ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -243,7 +272,9 @@ def _build_video_row(
     on_open_file: Optional[Callable[[str], None]],
 ) -> ft.Control:
     label, color = STATUS_LABELS.get(item.status, (item.status.value, AppTheme.GREY_500))
-    is_finished = item.status in (ItemStatus.COMPLETED, ItemStatus.FAILED, ItemStatus.CANCELLED)
+    is_finished = item.status in (
+        ItemStatus.COMPLETED, ItemStatus.PARTIAL, ItemStatus.FAILED, ItemStatus.CANCELLED,
+    )
     is_downloading = item.status == ItemStatus.DOWNLOADING
 
     fmt_label = FORMAT_LABELS.get(item.format.value, item.format.value.upper())
@@ -309,7 +340,7 @@ def _build_video_row(
     if is_finished:
         actions.append(_action_btn(ft.Icons.DELETE_OUTLINE, S.TOOLTIP_DELETE,
                                    lambda e, i=item.id: on_delete(i)))
-    if item.status in (ItemStatus.FAILED, ItemStatus.CANCELLED):
+    if item.status in (ItemStatus.FAILED, ItemStatus.PARTIAL, ItemStatus.CANCELLED):
         actions.append(_action_btn(ft.Icons.REPLAY, S.TOOLTIP_RETRY,
                                    lambda e, i=item.id: on_retry(i)))
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build script for ytdwpl.
-Downloads ffmpeg static binary and packages the app with PyInstaller.
+Downloads ffmpeg/ffprobe static binaries and packages the app with PyInstaller.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parent
 BIN_DIR = ROOT / "bin"
 
+# ffmpeg + ffprobe sources per platform
 FFMPEG_SOURCES = {
     "Windows": {
         "url": "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
@@ -27,10 +28,11 @@ FFMPEG_SOURCES = {
         "ffprobe": "bin/ffprobe.exe",
     },
     "Darwin": {
-        "url": "https://evermeet.cx/ffmpeg/ffmpeg.zip",
+        "ffmpeg_url": "https://evermeet.cx/ffmpeg/ffmpeg.zip",
+        "ffprobe_url": "https://evermeet.cx/ffmpeg/ffprobe.zip",
         "subdir": None,
         "ffmpeg": "ffmpeg",
-        "ffprobe": None,
+        "ffprobe": "ffprobe",
     },
     "Linux": {
         "url": "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
@@ -113,34 +115,65 @@ def fetch_ffmpeg() -> None:
     info = FFMPEG_SOURCES[system]
     BIN_DIR.mkdir(parents=True, exist_ok=True)
 
-    archive_name = info["url"].split("/")[-1]
-    archive_path = ROOT / ".build-cache" / archive_name
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_dir = ROOT / ".build-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    _download_file(info["url"], archive_path)
+    if system == "Darwin":
+        # macOS: separate downloads for ffmpeg and ffprobe
+        for tool, url_key in [("ffmpeg", "ffmpeg_url"), ("ffprobe", "ffprobe_url")]:
+            url = info[url_key]
+            archive_name = url.split("/")[-1]
+            archive_path = cache_dir / archive_name
+            _download_file(url, archive_path)
 
-    extract_to = ROOT / ".build-cache" / "extract"
-    if extract_to.exists():
-        shutil.rmtree(extract_to)
-    extract_to.mkdir(parents=True, exist_ok=True)
+            extract_to = cache_dir / "extract"
+            if extract_to.exists():
+                shutil.rmtree(extract_to)
+            extract_to.mkdir(parents=True, exist_ok=True)
 
-    if archive_name.endswith(".zip"):
-        _extract_zip(archive_path, extract_to, info)
+            with zipfile.ZipFile(archive_path) as zf:
+                for member in zf.namelist():
+                    name = Path(member).name
+                    if name == tool:
+                        zf.extract(member, extract_to)
+                        src = extract_to / member
+                        dst = BIN_DIR / name
+                        if src.is_file():
+                            shutil.move(str(src), str(dst))
+                            print(f"  extracted {dst.name}")
+
+            shutil.rmtree(extract_to, ignore_errors=True)
     else:
-        _extract_tar(archive_path, extract_to, info)
+        # Windows/Linux: single archive with both
+        archive_name = info["url"].split("/")[-1]
+        archive_path = cache_dir / archive_name
+        _download_file(info["url"], archive_path)
 
-    shutil.rmtree(extract_to, ignore_errors=True)
+        extract_to = cache_dir / "extract"
+        if extract_to.exists():
+            shutil.rmtree(extract_to)
+        extract_to.mkdir(parents=True, exist_ok=True)
+
+        if archive_name.endswith(".zip"):
+            _extract_zip(archive_path, extract_to, info)
+        else:
+            _extract_tar(archive_path, extract_to, info)
+
+        shutil.rmtree(extract_to, ignore_errors=True)
 
     # Verify
     ffmpeg_exe = info["ffmpeg"].split("/")[-1]
-    ffprobe_exe = info["ffprobe"].split("/")[-1] if info.get("ffprobe") else None
+    ffprobe_exe = info["ffprobe"].split("/")[-1]
     ffmpeg_path = BIN_DIR / ffmpeg_exe
-    ffprobe_path = BIN_DIR / ffprobe_exe if ffprobe_exe else None
-    ok = ffmpeg_path.exists() and (ffprobe_path is None or ffprobe_path.exists())
+    ffprobe_path = BIN_DIR / ffprobe_exe
+    ok = ffmpeg_path.exists() and ffprobe_path.exists()
     if ok:
         print(f"\nOK: ffmpeg ready at {ffmpeg_path}")
+        print(f"OK: ffprobe ready at {ffprobe_path}")
     else:
-        print(f"\nWARN: ffmpeg not found at expected path {ffmpeg_path}")
+        print(f"\nWARN: ffmpeg/ffprobe not found at expected paths")
+        print(f"  ffmpeg: {ffmpeg_path} ({'found' if ffmpeg_path.exists() else 'MISSING'})")
+        print(f"  ffprobe: {ffprobe_path} ({'found' if ffprobe_path.exists() else 'MISSING'})")
         print("  Install ffmpeg manually and place it in bin/")
 
 

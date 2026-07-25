@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 import flet as ft
@@ -34,12 +35,26 @@ def show_settings_dialog(
         width=100,
         keyboard_type=ft.KeyboardType.NUMBER,
     )
+    error_text = ft.Text(value="", color=AppTheme.ERROR)
 
     def close(e=None) -> None:
         page.pop_dialog()
 
     def save(e) -> None:
-        settings.output_dir = output_field.value.strip()
+        output_dir = (output_field.value or "").strip()
+        if output_dir:
+            try:
+                path = Path(output_dir).expanduser()
+                path.mkdir(parents=True, exist_ok=True)
+                if not path.is_dir():
+                    raise OSError("output path is not a directory")
+                settings.output_dir = str(path)
+            except OSError:
+                error_text.value = S.SETTINGS_INVALID_OUTPUT
+                page.update()
+                return
+        else:
+            settings.output_dir = ""
         settings.format = format_dropdown.value
         try:
             settings.max_concurrent = max(MAX_CONCURRENT_MIN, int(concurrent_field.value.strip()))
@@ -55,6 +70,7 @@ def show_settings_dialog(
         content=ft.Column([
             ft.Text(S.SETTINGS_OUTPUT_HINT),
             output_field,
+            error_text,
             ft.Divider(),
             format_dropdown,
             ft.Divider(),

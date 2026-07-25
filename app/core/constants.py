@@ -11,14 +11,19 @@ class S:
 
     TAB_QUEUE = "Cola"
     TAB_COMPLETED = "Completadas"
+    SEARCH_HINT = "Buscar en la cola..."
 
     EMPTY_LIST_TITLE = "No hay elementos en la lista"
     PLAYLIST_FALLBACK_TITLE = "Playlist"
     CHECK_MARK = "\u2713"
 
     STATUS_PENDING = "Pendiente"
+    STATUS_EXPANDING = "Obteniendo playlist"
+    STATUS_QUEUED = "En cola"
     STATUS_DOWNLOADING = "Descargando"
+    STATUS_PAUSED = "Pausada"
     STATUS_COMPLETED = "Completada"
+    STATUS_PARTIAL = "Parcial"
     STATUS_FAILED = "Error"
     STATUS_CANCELLED = "Cancelada"
 
@@ -36,6 +41,7 @@ class S:
     ADD_DIALOG_VIDEO_OPTION = "Video (MP4)"
     ADD_DIALOG_AUDIO_OPTION = "Audio (MP3)"
     ADD_DIALOG_ERROR_EMPTY_URL = "Ingresa una URL válida"
+    ADD_DIALOG_ERROR_INVALID_URL = "La URL debe comenzar con http:// o https://"
     ADD_DIALOG_CANCEL = "Cancelar"
     ADD_DIALOG_SUBMIT = "Agregar"
 
@@ -47,6 +53,7 @@ class S:
     SETTINGS_CONCURRENT_HINT = "Descargas simultaneas (1-10):"
     SETTINGS_CANCEL = "Cancelar"
     SETTINGS_SAVE = "Guardar"
+    SETTINGS_INVALID_OUTPUT = "No se pudo crear la carpeta de descargas"
 
     ADD_PLAYLIST_FETCHING = "Obteniendo informacion..."
     ADD_PLAYLIST_ERROR = "Error al obtener playlist"
@@ -69,6 +76,8 @@ class S:
 
     SUBTITLE_PENDING = "{} pend."
     SUBTITLE_QUEUED = "{} en cola"
+    SUBTITLE_PAUSED = "{} paus."
+    SUBTITLE_PARTIAL = "{} parc."
     SUBTITLE_FAILED = "{} err."
     OPEN_ERROR = "Error al abrir archivo"
     FILE_NOT_FOUND = "Archivo no encontrado"
@@ -101,9 +110,12 @@ class AppTheme:
 
 STATUS_LABELS = {
     ItemStatus.PENDING: (S.STATUS_PENDING, AppTheme.STATUS_PENDING),
-    ItemStatus.QUEUED: (S.STATUS_PENDING, AppTheme.STATUS_PENDING),
+    ItemStatus.EXPANDING: (S.STATUS_EXPANDING, AppTheme.STATUS_PENDING),
+    ItemStatus.QUEUED: (S.STATUS_QUEUED, AppTheme.STATUS_PENDING),
     ItemStatus.DOWNLOADING: (S.STATUS_DOWNLOADING, AppTheme.STATUS_DOWNLOADING),
+    ItemStatus.PAUSED: (S.STATUS_PAUSED, AppTheme.STATUS_CANCELLED),
     ItemStatus.COMPLETED: (S.STATUS_COMPLETED, AppTheme.STATUS_COMPLETED),
+    ItemStatus.PARTIAL: (S.STATUS_PARTIAL, AppTheme.STATUS_FAILED),
     ItemStatus.FAILED: (S.STATUS_FAILED, AppTheme.STATUS_FAILED),
     ItemStatus.CANCELLED: (S.STATUS_CANCELLED, AppTheme.STATUS_CANCELLED),
 }

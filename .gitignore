@@ -11,3 +11,4 @@ dist/
 .playwright-mcp/
 flet-snapshot.yml
 skills-lock.json
+bin/

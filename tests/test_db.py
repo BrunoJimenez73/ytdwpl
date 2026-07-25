@@ -34,6 +34,15 @@ class TestDB:
         )
         assert cursor.fetchone() is not None
 
+    def test_init_db_sets_schema_version_and_indexes(self):
+        version = db._conn().execute("PRAGMA user_version").fetchone()[0]
+        assert version == db.SCHEMA_VERSION
+        indexes = {
+            row[1] for row in db._conn().execute("PRAGMA index_list(queue_items)").fetchall()
+        }
+        assert "idx_queue_items_status_created" in indexes
+        assert "idx_queue_items_playlist" in indexes
+
     def test_add_and_get_item(self, sample_item: QueueItem):
         db.add_item(sample_item)
         loaded = db.get_item(sample_item.id)
@@ -77,6 +86,44 @@ class TestDB:
         loaded = db.get_item(sample_item.id)
         assert loaded is not None
         assert loaded.status == ItemStatus.DOWNLOADING
+
+    def test_claim_item_is_atomic(self, sample_item: QueueItem):
+        sample_item.status = ItemStatus.QUEUED
+        db.add_item(sample_item)
+        claimed = db.claim_item(sample_item.id)
+        assert claimed is not None
+        assert claimed.status == ItemStatus.DOWNLOADING
+        assert db.claim_item(sample_item.id) is None
+
+    def test_replace_item_with_items_is_transactional(self, sample_item: QueueItem):
+        db.add_item(sample_item)
+        replacement = QueueItem.new(
+            "https://example.com/video", DownloadFormat.VIDEO, playlist_id="playlist"
+        )
+        db.replace_item_with_items(sample_item.id, [replacement])
+        assert db.get_item(sample_item.id) is None
+        assert db.get_item(replacement.id) is not None
+
+    def test_sync_playlist_items_adds_new_items_and_preserves_state(self):
+        first = QueueItem.new(
+            "https://example.com/1", DownloadFormat.VIDEO,
+            playlist_id="playlist", playlist_title="Old", playlist_url="playlist-url",
+        )
+        first.status = ItemStatus.COMPLETED
+        db.add_item(first)
+        db.sync_playlist_items(
+            "playlist",
+            "New",
+            [
+                {"url": "https://example.com/1", "title": "Renamed"},
+                {"url": "https://example.com/2", "title": "New video"},
+            ],
+        )
+        items = db.get_playlist_items("playlist")
+        assert len(items) == 2
+        assert items[0].status == ItemStatus.COMPLETED
+        assert any(item.video_title == "New video" for item in items)
+        assert all(item.playlist_title == "New" for item in items)
 
     def test_update_status_with_extra_fields(self, sample_item: QueueItem):
         db.add_item(sample_item)

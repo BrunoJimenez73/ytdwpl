@@ -44,12 +44,13 @@ def _open_file_desktop(file_path: str, page: Optional[ft.Page] = None) -> None:
 
 
 def _show_snack(page: ft.Page, message: str) -> None:
+    page.overlay[:] = [control for control in page.overlay if not isinstance(control, ft.SnackBar)]
     sb = ft.SnackBar(content=ft.Text(message), open=True)
     page.overlay.append(sb)
     page.update()
 
 
-def build_app(page: ft.Page, output_dir: Path) -> None:
+def build_app(page: ft.Page, output_dir: Path) -> QueueManager:
     page.title = S.APP_TITLE
     page.theme_mode = ft.ThemeMode.SYSTEM
     page.padding = 16
@@ -60,8 +61,12 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
 
     _progress_data: Dict[str, DownloadProgress] = {}
     _progress_lock = threading.Lock()
+    _refresh_lock = threading.Lock()
+    _refresh_running = False
+    _refresh_requested = False
     _last_progress_ts = 0.0
     _expanded_ids: Set[str] = set()
+    _search_query = ""
 
     pending_table = ft.Container(expand=True)
     completed_table = ft.Container(expand=True)
@@ -72,12 +77,46 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     def _on_tab_change(e=None) -> None:
         _refresh()
 
+    def _on_search_change(e) -> None:
+        nonlocal _search_query
+        _search_query = e.control.value or ""
+        _refresh()
+
     def _refresh() -> None:
+        nonlocal _refresh_running, _refresh_requested
+        with _refresh_lock:
+            if _refresh_running:
+                _refresh_requested = True
+                return
+            _refresh_running = True
+
+        try:
+            while True:
+                with _refresh_lock:
+                    _refresh_requested = False
+                _refresh_once()
+                with _refresh_lock:
+                    if not _refresh_requested:
+                        break
+        finally:
+            with _refresh_lock:
+                _refresh_running = False
+
+    def _refresh_once() -> None:
         from app import db
         all_items = db.get_all_items()
+        query = _search_query.casefold().strip()
+        if query:
+            all_items = [
+                item for item in all_items
+                if query in " ".join((
+                    item.playlist_title, item.video_title, item.url, item.error,
+                )).casefold()
+            ]
         pending_items = [i for i in all_items if i.status in (
-            ItemStatus.PENDING, ItemStatus.DOWNLOADING,
-            ItemStatus.FAILED, ItemStatus.CANCELLED,
+            ItemStatus.PENDING, ItemStatus.EXPANDING, ItemStatus.QUEUED, ItemStatus.DOWNLOADING,
+            ItemStatus.PAUSED, ItemStatus.PARTIAL, ItemStatus.FAILED,
+            ItemStatus.CANCELLED,
         )]
         completed_items = [i for i in all_items if i.status == ItemStatus.COMPLETED]
 
@@ -154,7 +193,7 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     def _retry_item(item_id: str) -> None:
         from app import db
         item = db.get_item(item_id)
-        if item:
+        if item and item.status in (ItemStatus.FAILED, ItemStatus.PARTIAL, ItemStatus.CANCELLED):
             db.update_status(item_id, ItemStatus.QUEUED, selected=1)
             _refresh()
 
@@ -190,6 +229,7 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
         nonlocal settings
         settings = new_settings
         queue.max_concurrent = max(1, new_settings.max_concurrent)
+        queue.output_dir = Path(new_settings.output_dir) if new_settings.output_dir else Path.home()
 
     def _open_settings(e) -> None:
         show_settings_dialog(page, settings, _on_settings_saved)
@@ -205,10 +245,13 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
             else:
                 should_refresh = False
         if should_refresh:
-            _refresh()
+            page.run_thread(_refresh)
 
     def _handle_item_update(item: Optional[QueueItem]) -> None:
-        _refresh()
+        if item and item.status not in (ItemStatus.DOWNLOADING, ItemStatus.QUEUED):
+            with _progress_lock:
+                _progress_data.pop(item.id, None)
+        page.run_thread(_refresh)
 
     tabs = ft.Tabs(
         length=2,
@@ -235,6 +278,15 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
         on_change=_on_tab_change,
     )
 
+    search_field = ft.TextField(
+        hint_text=S.SEARCH_HINT,
+        prefix_icon=ft.Icons.SEARCH,
+        dense=True,
+        expand=True,
+        on_change=_on_search_change,
+    )
+    toolbar = ft.Row([search_field], expand=True)
+
     queue = QueueManager(
         output_dir=Path(settings.output_dir) if settings.output_dir else Path.home(),
         on_item_update=_handle_item_update,
@@ -251,7 +303,9 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
     fab = ft.FloatingActionButton(
         icon=ft.Icons.ADD,
         tooltip=S.TOOLTIP_ADD_PLAYLIST,
-        on_click=lambda e: show_add_dialog(page, _add_item),
+        on_click=lambda e: show_add_dialog(
+            page, _add_item, DownloadFormat(settings.format)
+        ),
         bgcolor=AppTheme.PRIMARY,
         foreground_color=AppTheme.ON_PRIMARY,
     )
@@ -262,7 +316,8 @@ def build_app(page: ft.Page, output_dir: Path) -> None:
         bgcolor=AppTheme.SURFACE_CONTAINER_HIGHEST,
     )
 
-    page.add(active_download_card, tabs, fab)
+    page.add(active_download_card, toolbar, tabs, fab)
 
     queue.start()
     _refresh()
+    return queue

@@ -48,3 +48,16 @@ class TestAppSettings:
     def test_path_creates_directory(self, tmp_home: Path):
         p = AppSettings.path()
         assert p.parent.exists()
+
+    def test_normalize_invalid_values(self):
+        settings = AppSettings(format="unknown", max_concurrent=999)
+        settings.normalize()
+        assert settings.format == DownloadFormat.VIDEO.value
+        assert settings.max_concurrent == 10
+
+    def test_save_normalizes_values(self, tmp_home: Path):
+        settings = AppSettings(format="unknown", max_concurrent=0)
+        settings.save()
+        loaded = AppSettings.load()
+        assert loaded.format == DownloadFormat.VIDEO.value
+        assert loaded.max_concurrent == 1

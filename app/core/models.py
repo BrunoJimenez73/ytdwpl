@@ -13,9 +13,12 @@ class DownloadFormat(str, Enum):
 
 class ItemStatus(str, Enum):
     PENDING = "pending"
+    EXPANDING = "expanding"
     QUEUED = "queued"
     DOWNLOADING = "downloading"
+    PAUSED = "paused"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

@@ -9,7 +9,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
 from app.core.constants import LOG_BUFFER_MAXLEN
 from app.core.models import DownloadFormat, QueueItem
@@ -33,6 +33,10 @@ ProgressCallback = Callable[[DownloadProgress], None]
 
 class DownloadCancelled(Exception):
     pass
+
+
+class DownloadPartial(Exception):
+    """Raised when yt-dlp finishes with recoverable item failures."""
 
 
 def _resolve_ffmpeg() -> Optional[str]:
@@ -91,14 +95,35 @@ def extract_playlist_info(url: str) -> dict:
 
 
 class Downloader:
+    _archive_locks: ClassVar[dict[str, threading.Lock]] = {}
+    _archive_locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
     def __init__(self) -> None:
         self._cancel_event = threading.Event()
         self._process: Optional[subprocess.Popen] = None
 
+    @classmethod
+    def archive_lock(cls, item: QueueItem, output_dir: Path) -> threading.Lock:
+        """Return the process lock for the archive used by an item."""
+        archive_id = item.playlist_id or item.id
+        archive_path = str(output_dir / ".ytdwpl-archive" / f"{archive_id}.archive.txt")
+        with cls._archive_locks_guard:
+            return cls._archive_locks.setdefault(archive_path, threading.Lock())
+
     def cancel(self) -> None:
         self._cancel_event.set()
-        if self._process and self._process.poll() is None:
-            self._process.terminate()
+        self._terminate_process()
+
+    def _terminate_process(self) -> None:
+        process = self._process
+        if not process or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
     def is_cancelled(self) -> bool:
         return self._cancel_event.is_set()
@@ -115,7 +140,6 @@ class Downloader:
         output_dir: Path,
         on_progress: ProgressCallback,
     ) -> None:
-        self._cancel_event.clear()
         archive_path = self._make_archive_path(item, output_dir)
         ffmpeg = _resolve_ffmpeg()
 
@@ -166,7 +190,7 @@ class Downloader:
         try:
             for raw_line in self._process.stdout or []:
                 if self._cancel_event.is_set():
-                    self._process.terminate()
+                    self._terminate_process()
                     raise DownloadCancelled()
 
                 line = raw_line.strip()
@@ -187,6 +211,7 @@ class Downloader:
                     except ValueError:
                         progress.percent = 0.0
                     progress.total_mb = _parse_size(m.group(2))
+                    progress.downloaded_mb = progress.total_mb * progress.percent / 100
                     if m.group(3):
                         progress.speed = m.group(3)
                     if m.group(4):
@@ -199,11 +224,19 @@ class Downloader:
 
                 elif "[ExtractAudio]" in line and "Destination" in line:
                     dest = line.split("Destination:")[-1].strip()
+                    progress.file_path = dest
                     progress.video_title = Path(dest).stem
+
+                elif "[Merger]" in line and " into " in line:
+                    merged_path = line.split(" into ", 1)[-1].strip().strip('"')
+                    progress.file_path = merged_path
+                    progress.video_title = Path(merged_path).stem
 
                 elif "has already been downloaded" in line:
                     path_part = line.split("[download]")[-1].strip()
-                    name = Path(path_part.split("has already")[0].strip()).stem
+                    downloaded_path = path_part.split("has already")[0].strip()
+                    progress.file_path = downloaded_path
+                    name = Path(downloaded_path).stem
                     progress.video_title = name
                     progress.status = "downloading"
 
@@ -223,7 +256,12 @@ class Downloader:
             self._process.wait()
             raise RuntimeError(f"Download failed: {e}") from e
 
-        if self._process.returncode not in (0, 2) and not self._cancel_event.is_set():
+        if self._process.returncode == 2 and not self._cancel_event.is_set():
+            error_lines = [l for l in log_buffer if "ERROR:" in l]
+            detail = ": " + "\n".join(error_lines[-3:]) if error_lines else ""
+            raise DownloadPartial(f"yt-dlp terminó parcialmente{detail}")
+
+        if self._process.returncode != 0 and not self._cancel_event.is_set():
             error_lines = [l for l in log_buffer if "ERROR:" in l]
             extra = "\n".join(error_lines[-3:]) if error_lines else ""
             detail = f": {extra}" if extra else ""
