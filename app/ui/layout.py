@@ -285,7 +285,7 @@ def build_app(page: ft.Page, output_dir: Path) -> QueueManager:
         expand=True,
         on_change=_on_search_change,
     )
-    toolbar = ft.Row([search_field], expand=True)
+    toolbar = ft.Row([search_field])
 
     queue = QueueManager(
         output_dir=Path(settings.output_dir) if settings.output_dir else Path.home(),
